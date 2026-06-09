@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.openjiuwen</groupId>
+        <artifactId>openjiuwen-java</artifactId>
+        <version>0.1.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>openjiuwen-core</artifactId>
+    <packaging>jar</packaging>
+    <name>Openjiuwen Core</name>
+    <description>纯接口+模型层 — 零 Spring 依赖，sealed interface/record/enum</description>
+
+    <!-- Java 21 sealed/record/pattern-matching，零外部依赖 -->
+</project>

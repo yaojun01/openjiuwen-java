@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.openjiuwen</groupId>
+        <artifactId>openjiuwen-java</artifactId>
+        <version>0.1.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>openjiuwen-runtime</artifactId>
+    <packaging>pom</packaging>
+    <name>Openjiuwen Runtime</name>
+    <description>Runtime 父模块 — kernel 实现 + 策略 + Spring Boot Starter</description>
+
+    <!-- P1 默认：不含 runtime-beta -->
+    <modules>
+        <module>runtime-core</module>
+        <module>runtime-alpha</module>
+        <module>openjiuwen-spring-boot-starter</module>
+    </modules>
+
+    <profiles>
+        <!-- -P all：包含 runtime-beta（P2 代码） -->
+        <profile>
+            <id>all</id>
+            <modules>
+                <module>runtime-beta</module>
+            </modules>
+        </profile>
+    </profiles>
+
+    <dependencies>
+        <!-- 所有 runtime 子模块共享的基础依赖 -->
+        <dependency>
+            <groupId>com.openjiuwen</groupId>
+            <artifactId>openjiuwen-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.projectreactor</groupId>
+            <artifactId>reactor-core</artifactId>
+        </dependency>
+
+        <!-- 测试依赖 -->
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.projectreactor</groupId>
+            <artifactId>reactor-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+</project>

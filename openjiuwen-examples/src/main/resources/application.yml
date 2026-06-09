@@ -1,0 +1,34 @@
+# Openjiuwen Example 配置
+# 实际运行需要配置 LLM provider（如 OpenAI / Zhipu / 通义千问）
+
+openjiuwen:
+  enabled: true
+  kernel:
+    default-model: gpt-4o-mini
+    default-autonomy-level: GUIDED
+    budget:
+      max-llm-calls: 50
+      max-tool-calls: 100
+      max-tokens: 100000
+      timeout-seconds: 300
+  alpha:
+    planning-mode: AUTO
+    verify-mode: AUTO
+    max-retries: 3
+    parallelism: 4
+  security:
+    enabled: true
+    sensitive-patterns:
+      - "\\b\\d{16,19}\\b"  # 银行卡号
+      - "\\b\\d{6}\\b"       # 6位验证码
+    mcp:
+      mtls-enabled: false
+  checkpoint:
+    store-type: memory
+
+# Spring AI 配置（按实际 LLM provider 修改）
+spring:
+  ai:
+    openai:
+      api-key: ${OPENAI_API_KEY:sk-placeholder}
+      base-url: ${OPENAI_BASE_URL:https://api.openai.com}

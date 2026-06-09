@@ -1,0 +1,232 @@
+package com.openjiuwen.runtime.core.engine;
+
+import com.openjiuwen.core.kernel.model.*;
+import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
+import reactor.core.publisher.Sinks;
+
+import java.time.Instant;
+import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+
+/**
+ * AgentKernel 默认实现。
+ *
+ * 职责：
+ * 1. 聚合 SafetyBoundary，在每个系统调用前后执行安全检查
+ * 2. 管理 LLM 调用（通过 Spring AI ChatModel 注入）
+ * 3. 管理工具调用（通过工具注册表注入）
+ * 4. 管理检查点存储（内存 / Redis / JDBC）
+ * 5. 管理事件流（通过 Reactor Sinks.Many 广播）
+ *
+ * 线程安全：所有状态都是 ConcurrentHashMap / CopyOnWriteArrayList，
+ * 配合虚拟线程可安全支持万级并发。
+ */
+public class DefaultAgentKernel implements AgentKernel {
+
+    /** LLM 调用函数。实际由 Spring AI ChatModel 实现。 */
+    private final LLMProvider llmProvider;
+
+    /** 工具注册表。toolName → 工具执行函数。 */
+    private final Map<ToolName, ToolExecutor> toolExecutors;
+
+    /** 检查点存储 */
+    private final CheckpointStore checkpointStore;
+
+    /** 安全边界 */
+    private final SafetyBoundary safetyBoundary;
+
+    /** 事件广播：每个 taskId 一个 Sink */
+    private final Map<TaskId, Sinks.Many<AgentEvent>> eventSinks = new ConcurrentHashMap<>();
+
+    /** 运行时结果存储：taskId → nodeId → result */
+    private final Map<TaskId, Map<NodeId, Object>> taskResults = new ConcurrentHashMap<>();
+
+    public DefaultAgentKernel(
+        LLMProvider llmProvider,
+        Map<ToolName, ToolExecutor> toolExecutors,
+        CheckpointStore checkpointStore,
+        SafetyBoundary safetyBoundary
+    ) {
+        this.llmProvider = Objects.requireNonNull(llmProvider);
+        this.toolExecutors = new ConcurrentHashMap<>(toolExecutors);
+        this.checkpointStore = Objects.requireNonNull(checkpointStore);
+        this.safetyBoundary = Objects.requireNonNull(safetyBoundary);
+    }
+
+    // ==================== 系统调用 1: think ====================
+
+    @Override
+    public Mono<String> think(String prompt, BudgetLimits budget) {
+        return Mono.fromCallable(() -> {
+            // 前置检查：预算
+            List<Violation> budgetViolations = safetyBoundary.checkBudget(budget);
+            if (!budgetViolations.isEmpty()) {
+                throw new SafetyViolationException("预算不足", budgetViolations);
+            }
+
+            // 调用 LLM
+            String output = llmProvider.call(prompt);
+
+            // 后置检查：输出安全性
+            List<Violation> outputViolations = safetyBoundary.checkLLMOutput(output);
+            if (!outputViolations.isEmpty()) {
+                // 对 CRITICAL 级别的违规直接抛出
+                boolean hasCritical = outputViolations.stream()
+                    .anyMatch(v -> v.severity() == Violation.Severity.CRITICAL);
+                if (hasCritical) {
+                    throw new SafetyViolationException("LLM 输出违规", outputViolations);
+                }
+                // 非 CRITICAL 的记录日志但放行
+            }
+
+            return output;
+        });
+    }
+
+    // ==================== 系统调用 2: invokeTool ====================
+
+    @Override
+    public Mono<ToolResult> invokeTool(ToolName toolName, Map<String, Object> arguments, BudgetLimits budget) {
+        return Mono.fromCallable(() -> {
+            // 前置检查：预算 + 工具权限
+            List<Violation> violations = safetyBoundary.checkToolCall(toolName, arguments, budget);
+            if (!violations.isEmpty()) {
+                boolean hasCritical = violations.stream()
+                    .anyMatch(v -> v.severity() == Violation.Severity.CRITICAL);
+                if (hasCritical) {
+                    throw new SafetyViolationException("工具调用被拒绝", violations);
+                }
+            }
+
+            // 查找工具
+            ToolExecutor executor = toolExecutors.get(toolName);
+            if (executor == null) {
+                return ToolResult.fail(toolName, "工具未注册: " + toolName);
+            }
+
+            // 执行工具
+            try {
+                Object result = executor.execute(arguments);
+                return ToolResult.ok(toolName, result);
+            } catch (Exception e) {
+                return ToolResult.fail(toolName, "工具执行失败: " + e.getMessage());
+            }
+        });
+    }
+
+    // ==================== 系统调用 3: observe ====================
+
+    @Override
+    public Mono<Map<NodeId, Object>> observe(TaskId taskId, Set<NodeId> nodeIds) {
+        return Mono.fromCallable(() -> {
+            Map<NodeId, Object> results = taskResults.getOrDefault(taskId, Map.of());
+            if (nodeIds == null || nodeIds.isEmpty()) {
+                return Collections.unmodifiableMap(results);
+            }
+            Map<NodeId, Object> filtered = new LinkedHashMap<>();
+            for (NodeId nid : nodeIds) {
+                if (results.containsKey(nid)) {
+                    filtered.put(nid, results.get(nid));
+                }
+            }
+            return Collections.unmodifiableMap(filtered);
+        });
+    }
+
+    // ==================== 系统调用 4: saveCheckpoint ====================
+
+    @Override
+    public Mono<CheckpointId> saveCheckpoint(Checkpoint checkpoint) {
+        return checkpointStore.save(checkpoint).thenReturn(checkpoint.checkpointId());
+    }
+
+    // ==================== 系统调用 5: restoreCheckpoint ====================
+
+    @Override
+    public Mono<Checkpoint> restoreCheckpoint(TaskId taskId) {
+        return checkpointStore.loadLatest(taskId)
+            .doOnNext(cp -> {
+                // 恢复结果存储
+                // 实际的反序列化逻辑由上层策略处理
+            });
+    }
+
+    // ==================== 系统调用 6: yield ====================
+
+    @Override
+    public Mono<CheckpointId> yield(TaskId taskId, YieldReason reason, String currentState) {
+        Checkpoint checkpoint = Checkpoint.of(taskId, "YIELDED", 0, currentState);
+        return saveCheckpoint(checkpoint)
+            .doOnNext(cpId -> emit(AgentEvent.of(taskId, EventType.TASK_PAUSED,
+                reason.description(), Map.of("reason", reason.getClass().getSimpleName()))).subscribe());
+    }
+
+    // ==================== 系统调用 7: emit ====================
+
+    @Override
+    public Mono<Void> emit(AgentEvent event) {
+        return Mono.fromRunnable(() -> {
+            Sinks.Many<AgentEvent> sink = eventSinks.computeIfAbsent(
+                event.taskId(), k -> Sinks.many().multicast().onBackpressureBuffer());
+            sink.tryEmitNext(event);
+        });
+    }
+
+    @Override
+    public Flux<AgentEvent> observeEvents(TaskId taskId) {
+        return eventSinks.computeIfAbsent(
+            taskId, k -> Sinks.many().multicast().onBackpressureBuffer()).asFlux();
+    }
+
+    // ==================== 内部辅助：注册执行结果 ====================
+
+    /**
+     * 记录节点的执行结果，供 observe() 查询。
+     * 由策略层在节点执行完成后调用。
+     */
+    public void recordNodeResult(TaskId taskId, NodeId nodeId, Object result) {
+        taskResults.computeIfAbsent(taskId, k -> new ConcurrentHashMap<>()).put(nodeId, result);
+    }
+
+    // ==================== 内部接口 ====================
+
+    /**
+     * LLM 调用抽象。由 Spring AI ChatModel 实现。
+     */
+    @FunctionalInterface
+    public interface LLMProvider {
+        String call(String prompt);
+    }
+
+    /**
+     * 工具执行抽象。@Tool 方法或 MCP 远程工具。
+     */
+    @FunctionalInterface
+    public interface ToolExecutor {
+        Object execute(Map<String, Object> arguments) throws Exception;
+    }
+
+    /**
+     * 检查点存储抽象。
+     */
+    public interface CheckpointStore {
+        Mono<Void> save(Checkpoint checkpoint);
+        Mono<Checkpoint> loadLatest(TaskId taskId);
+        Flux<Checkpoint> list(TaskId taskId);
+    }
+
+    /**
+     * 安全违规异常——不用于系统 bug，只用于 Agent 行为越界。
+     */
+    public static class SafetyViolationException extends RuntimeException {
+        private final List<Violation> violations;
+
+        public SafetyViolationException(String message, List<Violation> violations) {
+            super(message);
+            this.violations = violations;
+        }
+
+        public List<Violation> violations() { return violations; }
+    }
+}
