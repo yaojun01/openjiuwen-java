@@ -1,4 +1,15 @@
 package com.openjiuwen.runtime.criteria.model;
+/**
+ * ============================================================
+ *  P2 DRAFT -- NOT part of P1 default compilation.
+ *
+ * This file belongs to the `runtime-beta` module, which is excluded from
+ * P1's default Maven profile. It is only compiled with `-P all`.
+ *
+ * P2 will replace this draft with the final implementation.
+ * See: docs/architecture/05-beta-llm-autonomous-orchestration.md
+ * ============================================================
+ */
 
 /**
  * 成功标准提案——三层来源的统一抽象。

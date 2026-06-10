@@ -2,8 +2,10 @@ package com.openjiuwen.core.kernel.model;
 
 /**
  * 事件类型枚举。
- * 不管底层用 Alpha 策略还是 Beta 策略，事件类型统一。
- * 上层（SDK / 前端）只需要处理这些类型，不需要知道底层策略细节。
+ *
+ * P1 范围：通用事件 + Alpha（PEV）策略事件。
+ * P2 Beta 策略的事件类型不在此处定义——P2 接手时可在此恢复或通过 AgentEvent.metadata
+ * 传递策略专属信息。
  */
 public enum EventType {
 
@@ -31,20 +33,5 @@ public enum EventType {
     APPROVAL_REQUIRED,  // 需要人工审批
     APPROVAL_GRANTED,   // 审批通过
     APPROVAL_DENIED,    // 审批拒绝
-    CONSTRAINT_VIOLATED,// 约束被违反
-
-    // --- Beta 策略专属 ---
-    GOAL_ANALYZED,      // 目标分析完成
-    DECISION_MADE,      // LLM 做出决策
-    GUARDRAIL_TRIGGERED,// 护栏触发
-    SELF_REFLECTION,    // 自我反思
-    CONTEXT_COMPACTED,  // 上下文被压缩
-    GOAL_REPRIORITIZED, // 目标被重新排序
-    SPAWN_SUB_AGENT,    // 生成子 Agent
-    SUB_AGENT_COMPLETED, // 子 Agent 完成
-    REPLAN_REQUESTED,   // LLM 发起重规划
-    REPLAN_ASSESSED,    // 重规划可行性评估完成
-    GOAL_DRIFT_DETECTED, // 目标漂移检测
-    CRITERIA_VERIFIED,  // 成功标准验证完成
-    KNOWLEDGE_DEPOSITED // 知识沉淀完成
+    CONSTRAINT_VIOLATED // 约束被违反
 }
