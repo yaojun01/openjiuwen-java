@@ -6,6 +6,53 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.2.1] - 2026-06-11
+
+### Criteria 模块四轮对抗审查
+
+Criteria 模块（21 文件/1859 行）独立审查闭环，4 轮收敛至 CLEAN。
+
+**审查规模**：R1 50 raw → R2 25 → R3 1 → R4 0 | **修复**：13 fixes + 8 new tests
+
+#### 代码修复 (13)
+
+**正确性**：
+- **COR-002** `CriteriaGuardrail`: 构造函数加 `Objects.requireNonNull` null 防护
+- **COR-004** `KnowledgeAccumulator.accumulateAll()`: 大小不匹配时抛 `IllegalArgumentException`
+- **R2-CRIT-004** `CriteriaOrchestrator`: `confirm()`/`confirmWithOverrides()` 加 null check
+- **R2-CRIT-005** `DefaultCriteriaVerifier`: `canRuleCheck()` 同时检查 `finalDescription` 和 `originalProposal.description()`，用户覆盖不丢失规则关键词
+- **R2-CRIT-006** `CriteriaCheckEngine.allSatisfied()`: 空结果返回 false，防止 vacuous truth
+
+**安全**：
+- **SEC-003** `CriteriaGuardrail`: `giveUp.reason()` 截断至 200 字符 + 控制字符清洗，防止注入内容进入人机交互消息
+
+**设计**：
+- **DES-001** `CriteriaVerifier` → `CriteriaCheckEngine` 重命名，消除 criteria 包与 beta.verification 包的同名接口冲突
+- **DES-002** `KnowledgeAccumulator` 移除 `queryByIndustry`/`queryHighSuccess` 查询方法，保持单一职责（只写+维护）。`KnowledgeBackedOntologySource` 改为直接依赖 `CriteriaKnowledgeStore`
+- **DES-004** `OntologyCriteriaSource.infer()` → `query()`，语义对齐（本体查询是检索不是推理）
+
+**运行时 bug**：
+- **R3-CRIT** `GuardrailEngine.evaluate()`: 保留护栏返回的 `modifiedDecision`，修复 GiveUp→RequestHumanHelp 转换被丢弃的问题
+
+**文档**：
+- `CriteriaVerificationResult` Javadoc 引用旧名 `CriteriaVerifier` → `CriteriaCheckEngine`
+- `KnowledgeAccumulator` Javadoc 时效衰减描述对齐实际实现
+
+#### 新增测试 (8 个 JUnit 文件)
+
+| 测试文件 | 测试数 | 覆盖范围 |
+|---------|--------|---------|
+| `DefaultCriteriaProposerTest` | 9 | 提案去重、排序、来源优先级、4 行业覆盖 |
+| `DefaultCriteriaVerifierTest` | 11 | 规则检查、Inconclusive、补救策略、双描述覆盖、空结果 |
+| `DefaultKnowledgeAccumulatorTest` | 9 | 沉淀、合并、批量、低质淘汰、容量控制 |
+| `CriteriaGuardrailTest` | 9 | 完成检查、放弃转换、null 防护、reason 截断 |
+| `CriteriaKnowledgeEntryTest` | 7 | 合并、评分、sourceType 映射 |
+| `InMemoryCriteriaKnowledgeStoreTest` | 7 | CRUD、key 碰撞 |
+| `VerifiedCriterionTest` | 7 | from 工厂方法、校验、toCriteriaString |
+| `CriteriaTemplateRegistryTest` | 9 | 4 行业模板覆盖、defaultSelected 统计 |
+
+---
+
 ## [0.2.0] - 2026-06-10
 
 ### 三轮对抗审查闭环
