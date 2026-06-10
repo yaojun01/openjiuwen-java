@@ -1,15 +1,4 @@
 package com.openjiuwen.runtime.beta.guardrail;
-/**
- * ============================================================
- *  P2 DRAFT -- NOT part of P1 default compilation.
- *
- * This file belongs to the `runtime-beta` module, which is excluded from
- * P1's default Maven profile. It is only compiled with `-P all`.
- *
- * P2 will replace this draft with the final implementation.
- * See: docs/architecture/05-beta-llm-autonomous-orchestration.md
- * ============================================================
- */
 
 import com.openjiuwen.runtime.beta.model.LLMDecision;
 import com.openjiuwen.core.kernel.model.BudgetLimits;
@@ -49,6 +38,15 @@ public class GuardrailEngine {
 
     public GuardrailEngine(List<Guardrail> guardrails) {
         this.guardrails = List.copyOf(guardrails);
+    }
+
+    /**
+     * COR-P2-001: 创建包含所有内置护栏 + 额外护栏的新引擎。
+     */
+    public GuardrailEngine withExtra(Guardrail extra) {
+        List<Guardrail> combined = new ArrayList<>(this.guardrails);
+        combined.add(extra);
+        return new GuardrailEngine(combined);
     }
 
     /**

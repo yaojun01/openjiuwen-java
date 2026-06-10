@@ -53,6 +53,10 @@ public record TaskGraph(
             dependents.put(node.id(), new LinkedHashSet<>());
         }
         for (TaskEdge edge : edges) {
+            // NEW-007: 防御性跳过不存在的节点引用
+            if (!nodeMap.containsKey(edge.from()) || !nodeMap.containsKey(edge.to())) {
+                continue;
+            }
             inDegree.merge(edge.to(), 1, Integer::sum);
             dependents.get(edge.from()).add(edge.to());
         }

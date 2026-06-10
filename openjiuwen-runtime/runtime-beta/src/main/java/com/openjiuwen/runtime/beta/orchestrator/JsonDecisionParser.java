@@ -1,15 +1,4 @@
 package com.openjiuwen.runtime.beta.orchestrator;
-/**
- * ============================================================
- *  P2 DRAFT -- NOT part of P1 default compilation.
- *
- * This file belongs to the `runtime-beta` module, which is excluded from
- * P1's default Maven profile. It is only compiled with `-P all`.
- *
- * P2 will replace this draft with the final implementation.
- * See: docs/architecture/05-beta-llm-autonomous-orchestration.md
- * ============================================================
- */
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -103,6 +92,9 @@ public class JsonDecisionParser implements DecisionParser {
     private Optional<LLMDecision> parseCallTool(JsonNode node) {
         String tool = node.path("tool").asText(null);
         if (tool == null || tool.isBlank()) return Optional.empty();
+        tool = tool.trim();
+        // 工具名只允许字母、数字、下划线、连字符、点
+        if (!tool.matches("^[a-zA-Z0-9_\\-.]+$")) return Optional.empty();
 
         String reasoning = node.path("reasoning").asText("");
 
@@ -171,7 +163,7 @@ public class JsonDecisionParser implements DecisionParser {
 
     private Optional<LLMDecision> parseComplete(JsonNode node) {
         String output = node.path("output").asText("");
-        double confidence = node.path("confidence").asDouble(0.5);
+        double confidence = Math.min(1.0, Math.max(0.0, node.path("confidence").asDouble(0.5)));
         String summary = node.path("summary").asText("");
         if (output.isBlank()) return Optional.empty();
         return Optional.of(new LLMDecision.Complete(output, confidence, summary));

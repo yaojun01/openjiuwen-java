@@ -12,13 +12,37 @@
 
     <artifactId>runtime-beta</artifactId>
     <packaging>jar</packaging>
-    <name>Openjiuwen Runtime Beta (P2)</name>
-    <description>Beta 自主编排策略 + Criteria 系统 — P2 范围，Maven profile 控制</description>
+    <name>Openjiuwen Runtime Beta</name>
+    <description>Beta 自主编排策略 + Criteria 系统</description>
 
     <dependencies>
         <dependency>
             <groupId>com.openjiuwen</groupId>
             <artifactId>runtime-core</artifactId>
         </dependency>
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+        </dependency>
+        <!-- Test fixtures from runtime-core -->
+        <dependency>
+            <groupId>com.openjiuwen</groupId>
+            <artifactId>runtime-core</artifactId>
+            <type>test-jar</type>
+            <scope>test</scope>
+            <version>${project.version}</version>
+        </dependency>
     </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <argLine>--enable-preview</argLine>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
 </project>

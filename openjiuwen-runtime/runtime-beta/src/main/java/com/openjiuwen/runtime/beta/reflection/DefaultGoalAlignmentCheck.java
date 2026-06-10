@@ -1,15 +1,4 @@
 package com.openjiuwen.runtime.beta.reflection;
-/**
- * ============================================================
- *  P2 DRAFT -- NOT part of P1 default compilation.
- *
- * This file belongs to the `runtime-beta` module, which is excluded from
- * P1's default Maven profile. It is only compiled with `-P all`.
- *
- * P2 will replace this draft with the final implementation.
- * See: docs/architecture/05-beta-llm-autonomous-orchestration.md
- * ============================================================
- */
 
 import com.openjiuwen.runtime.beta.model.LLMDecision;
 import com.openjiuwen.core.kernel.model.ToolName;
@@ -26,8 +15,7 @@ import java.util.stream.Collectors;
  * 1. 每步检查（lightweight）——快速规则：
  *    a. 工具调用偏离度：最近 5 次工具调用中，有多少与目标关键词无关
  *    b. 思考内容偏离度：最近 3 次 ContinueThinking 的内容是否包含目标关键词
- *    c. 子目标偏离度：SpawnSubTasks 的子目标是否与父目标有语义重叠
- *    d. Replan 频率：连续 replan 表明目标不可达或路径不稳定
+ *    c. Replan 频率：连续 replan 表明目标不可达或路径不稳定
  *
  * 2. FinalAnswer 前检查（deep）——需要 LLM 判断：
  *    由 CriteriaVerifier 负责，本类不处理
@@ -35,7 +23,7 @@ import java.util.stream.Collectors;
  * 得分规则：
  * - 每个规则的偏离度 0.0-1.0
  * - 最终 score = 各规则得分的加权平均
- * - 权重：工具偏离(0.3) + 思考偏离(0.3) + replan频率(0.2) + 子目标偏离(0.2)
+ * - 权重：工具偏离(0.35) + 思考偏离(0.35) + replan频率(0.30)
  */
 public class DefaultGoalAlignmentCheck implements GoalAlignmentCheck {
 
