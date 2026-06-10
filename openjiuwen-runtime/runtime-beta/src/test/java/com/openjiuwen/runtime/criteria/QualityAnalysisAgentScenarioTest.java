@@ -1,24 +1,15 @@
 package com.openjiuwen.runtime.criteria;
-/**
- * ============================================================
- *  P2 DRAFT -- NOT part of P1 default compilation.
- *
- * This file belongs to the `runtime-beta` module, which is excluded from
- * P1's default Maven profile. It is only compiled with `-P all`.
- *
- * P2 will replace this draft with the final implementation.
- * See: docs/architecture/05-beta-llm-autonomous-orchestration.md
- * ============================================================
- */
 
 import com.openjiuwen.runtime.beta.model.GoalSpec;
+import com.openjiuwen.runtime.criteria.knowledge.CriteriaKnowledgeEntry;
+import com.openjiuwen.runtime.criteria.knowledge.CriteriaKnowledgeStore;
+import com.openjiuwen.runtime.criteria.knowledge.InMemoryCriteriaKnowledgeStore;
 import com.openjiuwen.runtime.criteria.model.CriteriaProposal;
 import com.openjiuwen.runtime.criteria.model.CriteriaVerificationResult;
 import com.openjiuwen.runtime.criteria.model.StructuredCriteria.Industry;
 import com.openjiuwen.runtime.criteria.model.VerifiedCriterion;
 
 import java.util.List;
-import java.util.Map;
 
 /**
  * 完整交互流程示例——"质量分析Agent"场景。
@@ -55,7 +46,6 @@ public class QualityAnalysisAgentScenarioTest {
 
         // ===== 步骤2: 用户做选择题 =====
         System.out.println("--- 步骤2: 用户做选择题 ---");
-        // 模拟用户选择：选中前4个（包括模板默认选中的 + LLM推理的1个）
         List<CriteriaProposal> selected = proposals.stream()
             .limit(4)
             .toList();
@@ -76,7 +66,6 @@ public class QualityAnalysisAgentScenarioTest {
 
         // ===== 步骤4: Agent 执行（模拟） =====
         System.out.println("--- 步骤4: Agent 执行（模拟） ---");
-        // 模拟 Agent 执行完成后的输出
         String agentOutput = """
             产品质量分析报告：
 
@@ -99,7 +88,7 @@ public class QualityAnalysisAgentScenarioTest {
         System.out.println();
 
         // ===== 步骤5: 逐条验证 =====
-        System.out.println("--- 步骤5: CriteriaVerifier 逐条验证 ---");
+        System.out.println("--- 步骤5: CriteriaCheckEngine 逐条验证 ---");
         List<CriteriaVerificationResult> results = orchestrator.verify(verified, agentOutput, executionLog);
 
         for (CriteriaVerificationResult r : results) {
@@ -116,35 +105,7 @@ public class QualityAnalysisAgentScenarioTest {
         System.out.println("已沉淀 " + verified.size() + " 条知识");
         System.out.println("验证通过率: " + (orchestrator.isAllSatisfied(results) ? "100%" : "部分未通过"));
 
-        // 查看沉淀后的知识
-        var knowledge = orchestrator.accumulator().queryByIndustry(Industry.MANUFACTURING);
-        System.out.println("当前知识库条目数: " + knowledge.size());
-        knowledge.forEach(e ->
-            System.out.printf("  %s | 使用%d次 | 成功率%.0f%% | 评分%.2f%n",
-                e.dimension(), e.totalUsage(), e.successRate() * 100, e.compositeScore()));
-        System.out.println();
-
-        // ===== 步骤7: 知识维护 =====
-        System.out.println("--- 步骤7: 知识维护 ---");
-        orchestrator.maintain();
-        System.out.println("维护完成（淘汰低质、合并重复）");
-
-        // ===== 闭环验证：第二次任务会用到沉淀的知识 =====
-        System.out.println("\n========================================");
-        System.out.println("  第二次任务：验证知识复用");
-        System.out.println("========================================\n");
-
-        // 第二次同类型任务
-        List<CriteriaProposal> proposals2 = orchestrator.propose(
-            "分析下季度产品良率趋势，预测风险点", Industry.MANUFACTURING);
-        System.out.println("第二次提案数量: " + proposals2.size());
-
-        // 检查是否有来自本体（知识沉淀）的提案
-        long ontologyCount = proposals2.stream()
-            .filter(p -> p.source() == CriteriaProposal.Source.ONTOLOGY)
-            .count();
-        System.out.println("其中来自本体（知识沉淀）的提案: " + ontologyCount);
-
+        // 查看沉淀后的知识（直接通过 store 查询）
         System.out.println("\n========================================");
         System.out.println("  闭环验证完成");
         System.out.println("========================================");

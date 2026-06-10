@@ -53,20 +53,28 @@ public class GuardrailEngine {
      * 检查 LLM 决策是否合规。
      * 逐一执行所有护栏，返回第一个拒绝的结果。
      *
+     * 如果某个护栏通过 modify() 修改了决策（如 GiveUp → RequestHumanHelp），
+     * 使用修改后的版本继续检查后续护栏，并在最终结果中携带修改后的决策。
+     *
      * @param decision LLM 的决策
      * @param context  护栏上下文
-     * @return 全部通过返回 pass，否则返回第一个拒绝原因
+     * @return 全部通过返回 pass（可能携带 modifiedDecision），否则返回第一个拒绝原因
      */
     public Guardrail.GuardrailResult evaluate(LLMDecision decision, Guardrail.GuardrailContext context) {
+        LLMDecision currentDecision = decision;
         for (Guardrail guardrail : guardrails) {
-            Guardrail.GuardrailResult result = guardrail.check(decision, context);
+            Guardrail.GuardrailResult result = guardrail.check(currentDecision, context);
             if (!result.passed()) {
                 return result;
             }
             // 如果护栏修改了决策，使用修改后的版本继续检查
             if (result.modifiedDecision() != null) {
-                decision = result.modifiedDecision();
+                currentDecision = result.modifiedDecision();
             }
+        }
+        // 如果决策被某个护栏修改过（如 GiveUp → RequestHumanHelp），返回带修改决策的结果
+        if (currentDecision != decision) {
+            return new Guardrail.GuardrailResult(true, null, currentDecision);
         }
         return Guardrail.GuardrailResult.pass();
     }

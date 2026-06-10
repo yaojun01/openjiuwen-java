@@ -7,6 +7,7 @@ import com.openjiuwen.runtime.criteria.model.StructuredCriteria.Industry;
 import com.openjiuwen.runtime.criteria.model.VerifiedCriterion;
 
 import java.util.List;
+import java.util.Objects;
 
 /**
  * 成功标准编排器——完整闭环的入口。
@@ -51,11 +52,11 @@ import java.util.List;
 public class CriteriaOrchestrator {
 
     private final CriteriaProposer proposer;
-    private final CriteriaVerifier verifier;
+    private final CriteriaCheckEngine verifier;
     private final KnowledgeAccumulator accumulator;
 
     public CriteriaOrchestrator(CriteriaProposer proposer,
-                                CriteriaVerifier verifier,
+                                CriteriaCheckEngine verifier,
                                 KnowledgeAccumulator accumulator) {
         this.proposer = proposer;
         this.verifier = verifier;
@@ -85,6 +86,7 @@ public class CriteriaOrchestrator {
      * @return 已验证的标准列表
      */
     public List<VerifiedCriterion> confirm(List<CriteriaProposal> selectedProposals) {
+        Objects.requireNonNull(selectedProposals, "selectedProposals must not be null");
         return selectedProposals.stream()
             .map(proposal -> VerifiedCriterion.from(proposal, null))
             .toList();
@@ -99,6 +101,7 @@ public class CriteriaOrchestrator {
     public List<VerifiedCriterion> confirmWithOverrides(
         List<java.util.Map.Entry<CriteriaProposal, String>> selections
     ) {
+        Objects.requireNonNull(selections, "selections must not be null");
         return selections.stream()
             .map(entry -> VerifiedCriterion.from(entry.getKey(), entry.getValue()))
             .toList();

@@ -8,9 +8,12 @@ import java.util.List;
 /**
  * 成功标准验证引擎——Agent 执行完成后的逐条检查。
  *
+ * 命名说明：此类负责"事后逐条文本匹配/LLM判断"，
+ * 与 beta.verification.CriteriaVerifier（"执行中决策历史验证"）职责不同。
+ *
  * 验证流程：
  * 1. Agent 执行完成，产出最终结果
- * 2. CriteriaVerifier 逐条检查 successCriteria
+ * 2. CriteriaCheckEngine 逐条检查 successCriteria
  * 3. 每条标准通过规则判断或 LLM 判断
  * 4. 汇总验证结果，决定是否通过
  *
@@ -21,7 +24,7 @@ import java.util.List;
  *
  * 验证结果反馈给 KnowledgeAccumulator，完成知识沉淀闭环。
  */
-public interface CriteriaVerifier {
+public interface CriteriaCheckEngine {
 
     /**
      * 逐条验证成功标准。
@@ -39,8 +42,10 @@ public interface CriteriaVerifier {
 
     /**
      * 汇总判断：所有标准是否都满足。
+     * 空结果列表返回 false（避免空验证的 vacuous truth）。
      */
     default boolean allSatisfied(List<CriteriaVerificationResult> results) {
+        if (results == null || results.isEmpty()) return false;
         return results.stream().allMatch(CriteriaVerificationResult::isSatisfied);
     }
 
@@ -52,17 +57,5 @@ public interface CriteriaVerifier {
             .filter(r -> r instanceof CriteriaVerificationResult.NotSatisfied)
             .map(r -> (CriteriaVerificationResult.NotSatisfied) r)
             .anyMatch(r -> r.remediation() == CriteriaVerificationResult.RemediationAction.REPLAN);
-    }
-
-    /**
-     * 获取所有不满足的标准（用于反馈给 LLM 重新规划）。
-     */
-    default List<CriteriaVerificationResult.NotSatisfied> getFailures(
-        List<CriteriaVerificationResult> results
-    ) {
-        return results.stream()
-            .filter(r -> r instanceof CriteriaVerificationResult.NotSatisfied)
-            .map(r -> (CriteriaVerificationResult.NotSatisfied) r)
-            .toList();
     }
 }

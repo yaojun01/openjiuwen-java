@@ -3,7 +3,7 @@ package com.openjiuwen.runtime.criteria.model;
 /**
  * 单条成功标准的验证结果。
  *
- * Agent 执行完成后，CriteriaVerifier 逐条检查 successCriteria，
+ * Agent 执行完成后，CriteriaCheckEngine 逐条检查 successCriteria，
  * 每条产生一个 CriteriaVerificationResult。
  *
  * sealed interface 确保所有验证状态被枚举：

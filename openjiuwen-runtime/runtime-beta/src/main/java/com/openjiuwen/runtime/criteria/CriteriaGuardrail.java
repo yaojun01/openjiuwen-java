@@ -5,6 +5,7 @@ import com.openjiuwen.runtime.beta.model.LLMDecision;
 import com.openjiuwen.runtime.criteria.model.VerifiedCriterion;
 
 import java.util.List;
+import java.util.Objects;
 
 /**
  * 成功标准护栏——在 Beta 策略执行过程中检查决策是否偏离成功标准。
@@ -17,7 +18,7 @@ import java.util.List;
  * - LLMDecision.Complete 决策前：检查是否所有关键标准都有对应的执行证据
  * - LLMDecision.SpawnSubTasks 决策前：检查子目标是否覆盖了主要标准
  *
- * 注意：这不是替代 CriteriaVerifier 的完整验证，
+ * 注意：这不是替代 CriteriaCheckEngine 的完整验证，
  * 而是 Beta 执行过程中的"快速对照"，防止 Agent 提前声称完成。
  */
 public class CriteriaGuardrail implements Guardrail {
@@ -25,6 +26,7 @@ public class CriteriaGuardrail implements Guardrail {
     private final List<VerifiedCriterion> successCriteria;
 
     public CriteriaGuardrail(List<VerifiedCriterion> successCriteria) {
+        Objects.requireNonNull(successCriteria, "successCriteria must not be null");
         this.successCriteria = List.copyOf(successCriteria);
     }
 
@@ -88,6 +90,9 @@ public class CriteriaGuardrail implements Guardrail {
         return GuardrailResult.pass();
     }
 
+    /** SEC-003: 最大消息长度，防止 LLM 输出的 reason 过长 */
+    private static final int MAX_MESSAGE_LENGTH = 500;
+
     /**
      * 检查放弃决策：Agent 放弃时，提醒哪些标准未达成。
      */
@@ -97,10 +102,11 @@ public class CriteriaGuardrail implements Guardrail {
             .toList();
 
         if (!allDimensions.isEmpty()) {
+            String safeReason = sanitizeForMessage(giveUp.reason(), 200);
             return GuardrailResult.modify(
                 new LLMDecision.RequestHumanHelp(
                     "Agent 尝试放弃任务，但以下成功标准尚未达成: "
-                        + allDimensions + "。原因: " + giveUp.reason()
+                        + allDimensions + "。原因: " + safeReason
                         + "。请决定是否继续或调整目标。",
                     giveUp.partialResult()
                 ),
@@ -109,5 +115,17 @@ public class CriteriaGuardrail implements Guardrail {
         }
 
         return GuardrailResult.pass();
+    }
+
+    /** SEC-003: 清洗 LLM 输出，防止注入内容进入人机交互消息 */
+    private String sanitizeForMessage(String text, int maxLength) {
+        if (text == null) return "（无原因）";
+        // 移除控制字符
+        String cleaned = text.replaceAll("[\\x00-\\x1F\\x7F]", "");
+        // 截断
+        if (cleaned.length() > maxLength) {
+            cleaned = cleaned.substring(0, maxLength) + "...";
+        }
+        return cleaned;
     }
 }

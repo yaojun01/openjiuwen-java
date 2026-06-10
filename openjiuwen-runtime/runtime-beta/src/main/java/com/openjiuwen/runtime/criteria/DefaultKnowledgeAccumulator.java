@@ -100,21 +100,4 @@ public class DefaultKnowledgeAccumulator implements KnowledgeAccumulator {
         }
     }
 
-    @Override
-    public List<CriteriaKnowledgeEntry> queryByIndustry(Industry industry) {
-        return store.loadAll().stream()
-            .filter(e -> e.industry() == industry)
-            .filter(e -> !e.deprecated())
-            .sorted(Comparator.comparingDouble(CriteriaKnowledgeEntry::compositeScore).reversed())
-            .toList();
-    }
-
-    @Override
-    public List<CriteriaKnowledgeEntry> queryHighSuccess(Industry industry, int topN) {
-        return queryByIndustry(industry).stream()
-            .filter(e -> e.totalUsage() >= 3)
-            .filter(e -> e.successRate() >= HIGH_SUCCESS_THRESHOLD)
-            .limit(topN)
-            .toList();
-    }
 }

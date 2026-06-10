@@ -26,7 +26,7 @@ import java.util.Set;
  * - 原始提案是 TemplateProposal 且 defaultSelected=false → WARN_CONTINUE
  * - 其他来源 → ESCALATE_HUMAN
  */
-public class DefaultCriteriaVerifier implements CriteriaVerifier {
+public class DefaultCriteriaVerifier implements CriteriaCheckEngine {
 
     /** 可用规则判断的关键词模式 */
     private static final Set<String> RULE_KEYWORDS = Set.of(
@@ -58,8 +58,9 @@ public class DefaultCriteriaVerifier implements CriteriaVerifier {
         String agentOutput,
         String executionLog
     ) {
-        // 1. 尝试规则判断
-        if (canRuleCheck(criterion.finalDescription())) {
+        // 1. 尝试规则判断（同时检查最终描述和原始提案描述，用户覆盖不应丢失规则关键词）
+        if (canRuleCheck(criterion.finalDescription())
+            || canRuleCheck(criterion.originalProposal().description())) {
             return ruleCheck(criterion, agentOutput, executionLog);
         }
 
