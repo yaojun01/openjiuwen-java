@@ -7,6 +7,14 @@ import com.openjiuwen.runtime.beta.model.LLMDecision;
 import com.openjiuwen.runtime.beta.orchestrator.AutonomousOrchestrator;
 import com.openjiuwen.runtime.beta.orchestrator.JsonDecisionParser;
 import com.openjiuwen.runtime.beta.verification.DecisionHistoryCriteriaVerifier;
+import com.openjiuwen.runtime.criteria.CriteriaOrchestrator;
+import com.openjiuwen.runtime.criteria.CriteriaGuardrail;
+import com.openjiuwen.runtime.beta.plan.BetaPlan;
+import com.openjiuwen.runtime.beta.plan.PlanStep;
+import com.openjiuwen.runtime.criteria.model.CriteriaProposal;
+import com.openjiuwen.runtime.criteria.model.CriteriaVerificationResult;
+import com.openjiuwen.runtime.criteria.model.StructuredCriteria;
+import com.openjiuwen.runtime.criteria.model.VerifiedCriterion;
 import com.openjiuwen.core.dispatch.AutonomyLevel;
 import com.openjiuwen.core.kernel.model.*;
 import org.junit.jupiter.api.BeforeEach;
@@ -142,6 +150,166 @@ class AutonomousOrchestratorTest {
 
             goal = goal.withReplan(new GoalSpec.ReplanRecord(1, "原因2", "策略2"));
             assertFalse(goal.canReplan(), "2次 replan 后应超限");
+        }
+    }
+
+    @Nested
+    @DisplayName("Criteria 生命周期集成")
+    class CriteriaLifecycleTest {
+
+        @Test
+        @DisplayName("无 CriteriaOrchestrator 时 GoalSpec 无 successCriteria（向后兼容）")
+        void noOrchestrator_backwardCompatible() {
+            AutonomousOrchestrator orch = new AutonomousOrchestrator(guardrailEngine);
+            assertNotNull(orch);
+            // DecisionHistoryCriteriaVerifier with empty criteria returns empty
+            DecisionHistoryCriteriaVerifier verifier = new DecisionHistoryCriteriaVerifier();
+            GoalSpec goal = GoalSpec.of("测试任务");
+            LLMDecision.Complete complete = new LLMDecision.Complete("完成", 0.9, "总结");
+            List<Violation> violations = verifier.verify(goal, List.of(), complete);
+            assertTrue(violations.isEmpty(), "无标准时应直接通过");
+        }
+
+        @Test
+        @DisplayName("CriteriaOrchestrator propose→confirm→buildGoalSpec 生成带标准的 GoalSpec")
+        void proposeAndConfirm_enrichesGoalSpec() {
+            CriteriaOrchestrator co = new CriteriaOrchestrator();
+            List<CriteriaProposal> proposals = co.propose(
+                "分析客户退款原因", StructuredCriteria.Industry.GENERAL);
+            assertFalse(proposals.isEmpty(), "应有模板提案");
+
+            List<VerifiedCriterion> verified = co.confirm(
+                proposals.stream().limit(3).toList());
+            GoalSpec goal = co.buildGoalSpec("分析客户退款原因", verified);
+
+            assertFalse(goal.successCriteria().isEmpty(), "GoalSpec 应包含 successCriteria");
+            // 验证 criteria 格式为 [dimension] description
+            for (String c : goal.successCriteria()) {
+                assertTrue(c.startsWith("[") && c.contains("]"),
+                    "标准格式应为 [dimension] description: " + c);
+            }
+        }
+
+        @Test
+        @DisplayName("enriched GoalSpec 被 DecisionHistoryCriteriaVerifier 正确验证")
+        void enrichedGoalSpec_detectedByDHCV() {
+            CriteriaOrchestrator co = new CriteriaOrchestrator();
+            List<CriteriaProposal> proposals = co.propose(
+                "产品质量分析", StructuredCriteria.Industry.GENERAL);
+            List<VerifiedCriterion> verified = co.confirm(
+                proposals.stream().limit(3).toList());
+            GoalSpec goal = co.buildGoalSpec("产品质量分析", verified);
+
+            DecisionHistoryCriteriaVerifier verifier = new DecisionHistoryCriteriaVerifier();
+            // 极简输出，不可能覆盖真实标准
+            LLMDecision.Complete complete = new LLMDecision.Complete("分析完成", 0.9, "总结");
+            List<Violation> violations = verifier.verify(goal, List.of(), complete);
+
+            assertFalse(violations.isEmpty(), "应有未覆盖的标准");
+        }
+
+        @Test
+        @DisplayName("guardrailEngine.withExtra(CriteriaGuardrail) 正常工作")
+        void criteriaGuardrail_functional() {
+            CriteriaOrchestrator co = new CriteriaOrchestrator();
+            List<CriteriaProposal> proposals = co.propose(
+                "任务", StructuredCriteria.Industry.GENERAL);
+            List<VerifiedCriterion> verified = co.confirm(
+                proposals.stream().limit(2).toList());
+
+            GuardrailEngine engine = guardrailEngine.withExtra(new CriteriaGuardrail(verified));
+            LLMDecision.Complete incomplete = new LLMDecision.Complete("简单输出", 0.95, "总结");
+            Guardrail.GuardrailContext ctx = new Guardrail.GuardrailContext(
+                TaskId.generate(),
+                BudgetLimits.start(Budget.Fixed.productionDefault()),
+                List.of(), Map.of());
+
+            Guardrail.GuardrailResult result = engine.evaluate(incomplete, ctx);
+            assertNotNull(result, "evaluate 应正常返回");
+        }
+
+        @Test
+        @DisplayName("Post-execution verify → accumulate → maintain 完整闭环")
+        void postExecution_fullCycle() {
+            CriteriaOrchestrator co = new CriteriaOrchestrator();
+            List<CriteriaProposal> proposals = co.propose(
+                "分析任务", StructuredCriteria.Industry.GENERAL);
+            List<VerifiedCriterion> verified = co.confirm(
+                proposals.stream().limit(2).toList());
+
+            String agentOutput = "分析完成，涵盖所有维度";
+            String execLog = "工具调用: analyze()";
+
+            List<CriteriaVerificationResult> results = co.verify(
+                verified, agentOutput, execLog);
+            assertNotNull(results, "verify 应返回结果");
+            assertEquals(verified.size(), results.size(), "每条标准应有一个结果");
+
+            // accumulate 不应抛异常
+            assertDoesNotThrow(() -> co.accumulate(
+                verified, results, StructuredCriteria.Industry.GENERAL));
+
+            // maintain 不应抛异常
+            assertDoesNotThrow(() -> co.maintain());
+        }
+
+        @Test
+        @DisplayName("GiveUp 决策也能从 CriteriaGuardrail 转为 RequestHumanHelp")
+        void giveUp_convertedToRequestHumanHelp() {
+            CriteriaOrchestrator co = new CriteriaOrchestrator();
+            List<CriteriaProposal> proposals = co.propose(
+                "任务", StructuredCriteria.Industry.GENERAL);
+            List<VerifiedCriterion> verified = co.confirm(
+                proposals.stream().limit(2).toList());
+
+            GuardrailEngine engine = guardrailEngine.withExtra(new CriteriaGuardrail(verified));
+            LLMDecision.GiveUp giveUp = new LLMDecision.GiveUp("无法完成", "部分结果");
+            Guardrail.GuardrailContext ctx = new Guardrail.GuardrailContext(
+                TaskId.generate(),
+                BudgetLimits.start(Budget.Fixed.productionDefault()),
+                List.of(), Map.of());
+
+            Guardrail.GuardrailResult result = engine.evaluate(giveUp, ctx);
+            assertTrue(result.passed(), "GiveUp 应被通过（转为 modify）");
+            assertNotNull(result.modifiedDecision(), "GiveUp 应被转为 RequestHumanHelp");
+            assertInstanceOf(LLMDecision.RequestHumanHelp.class, result.modifiedDecision(),
+                "转换后的决策应为 RequestHumanHelp");
+        }
+    }
+
+    @Nested
+    @DisplayName("计划集成")
+    class PlanIntegrationTest {
+
+        @Test
+        @DisplayName("BetaPlan.empty() 时不影响 orchestrator 创建（向后兼容）")
+        void emptyPlan_backwardCompatible() {
+            BetaPlan empty = BetaPlan.empty();
+            assertTrue(empty.steps().isEmpty());
+            assertEquals("", empty.formatForPrompt());
+            assertEquals(-1, empty.currentStepIndex());
+            assertFalse(empty.hasPending());
+        }
+
+        @Test
+        @DisplayName("BetaPlan 正确跟踪进度")
+        void planProgress() {
+            List<PlanStep> steps = java.util.stream.IntStream.range(0, 3)
+                .mapToObj(i -> new PlanStep(i, "步骤" + (i + 1), PlanStep.StepStatus.PENDING))
+                .toList();
+            BetaPlan plan = new BetaPlan(steps, 0);
+
+            assertEquals(0, plan.currentStepIndex());
+            assertTrue(plan.hasPending());
+
+            plan = plan.markCurrentDone();
+            assertEquals(1, plan.currentStepIndex());
+
+            plan = plan.markCurrentDone();
+            assertEquals(2, plan.currentStepIndex());
+
+            plan = plan.markCurrentDone();
+            assertFalse(plan.hasPending(), "全部完成");
         }
     }
 }

@@ -58,6 +58,12 @@ public class DefaultDecisionPromptBuilder implements DecisionPromptBuilder {
                   .append(escapeXml(ctx.successCriteria())).append("</success_criteria>\n\n");
         }
 
+        // 区域 1.5: 执行计划与进度（可变步骤列表）
+        if (ctx.plan() != null && !ctx.plan().isBlank()) {
+            prompt.append("# 执行计划与进度\n<execution_plan>")
+                  .append(escapeXml(ctx.plan())).append("</execution_plan>\n\n");
+        }
+
         // 区域 2: 预算与约束（系统生成，不需要转义）
         prompt.append("# 预算消耗\n").append(ctx.budgetRemaining()).append("\n");
         prompt.append("重规划次数: ").append(ctx.replanCount()).append(" / ").append(ctx.maxReplanCount()).append("\n");

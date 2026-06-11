@@ -38,7 +38,8 @@ class DefaultDecisionPromptBuilderTest {
                 "预算消耗已过半",
                 1,
                 5,
-                8
+                8,
+                null
             );
 
             String prompt = builder.build(ctx);
@@ -64,7 +65,7 @@ class DefaultDecisionPromptBuilderTest {
         void noSuccessCriteria() {
             DecisionPromptBuilder.DecisionContext ctx = new DecisionPromptBuilder.DecisionContext(
                 "简单任务", "", "Token: 100/10000 | LLM: 1/10",
-                "", "", null, 0, 5, 1
+                "", "", null, 0, 5, 1, null
             );
 
             String prompt = builder.build(ctx);
@@ -81,7 +82,7 @@ class DefaultDecisionPromptBuilderTest {
         @DisplayName("reflectionHint 为空字符串时不出现反思区域")
         void emptyReflectionHint() {
             DecisionPromptBuilder.DecisionContext ctx = new DecisionPromptBuilder.DecisionContext(
-                "任务", null, "预算", "", "", "", 0, 5, 1
+                "任务", null, "预算", "", "", "", 0, 5, 1, null
             );
 
             String prompt = builder.build(ctx);
@@ -94,7 +95,7 @@ class DefaultDecisionPromptBuilderTest {
         void withHistory() {
             DecisionPromptBuilder.DecisionContext ctx = new DecisionPromptBuilder.DecisionContext(
                 "任务", null, "预算",
-                "步骤1: 调用工具A\n步骤2: 思考", "", null, 0, 5, 2
+                "步骤1: 调用工具A\n步骤2: 思考", "", null, 0, 5, 2, null
             );
 
             String prompt = builder.build(ctx);
@@ -113,7 +114,7 @@ class DefaultDecisionPromptBuilderTest {
         @DisplayName("prompt 包含所有 7 种决策类型的 JSON 格式说明")
         void allDecisionTypesPresent() {
             DecisionPromptBuilder.DecisionContext ctx = new DecisionPromptBuilder.DecisionContext(
-                "任务", null, "预算", "", "", null, 0, 5, 1
+                "任务", null, "预算", "", "", null, 0, 5, 1, null
             );
 
             String prompt = builder.build(ctx);
@@ -125,6 +126,41 @@ class DefaultDecisionPromptBuilderTest {
             assertTrue(prompt.contains("replan"), "应包含 replan");
             assertTrue(prompt.contains("complete"), "应包含 complete");
             assertTrue(prompt.contains("give_up"), "应包含 give_up");
+        }
+    }
+
+    @Nested
+    @DisplayName("计划区域（plan section）")
+    class PlanSectionTest {
+
+        @Test
+        @DisplayName("plan 非 null 时 prompt 包含 <execution_plan> 标签")
+        void planPresent() {
+            DecisionPromptBuilder.DecisionContext ctx = new DecisionPromptBuilder.DecisionContext(
+                "处理退款", "退款金额正确", "预算", "", "", null, 0, 5, 1,
+                "[1/3] >>>      - 查询订单\n[2/3] PENDING  - 计算金额\n[3/3] PENDING  - 执行退款\n"
+            );
+
+            String prompt = builder.build(ctx);
+
+            assertTrue(prompt.contains("# 执行计划与进度"), "应包含计划标题");
+            assertTrue(prompt.contains("<execution_plan>"), "应用 XML 标签包裹");
+            assertTrue(prompt.contains("查询订单"), "应包含计划内容");
+        }
+
+        @Test
+        @DisplayName("plan 为 null 时 prompt 不包含计划区域")
+        void planNull() {
+            DecisionPromptBuilder.DecisionContext ctx = new DecisionPromptBuilder.DecisionContext(
+                "任务", null, "预算", "", "", null, 0, 5, 1, null
+            );
+
+            String prompt = builder.build(ctx);
+
+            assertFalse(prompt.contains("# 执行计划与进度"),
+                "null plan 不应出现计划区域");
+            assertFalse(prompt.contains("<execution_plan>"),
+                "null plan 不应出现 execution_plan 标签");
         }
     }
 }

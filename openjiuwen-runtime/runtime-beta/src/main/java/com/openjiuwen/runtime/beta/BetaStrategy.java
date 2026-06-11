@@ -2,10 +2,15 @@ package com.openjiuwen.runtime.beta;
 
 import com.openjiuwen.runtime.beta.guardrail.GuardrailEngine;
 import com.openjiuwen.runtime.beta.orchestrator.AutonomousOrchestrator;
+import com.openjiuwen.runtime.beta.orchestrator.JsonDecisionParser;
+import com.openjiuwen.runtime.beta.orchestrator.DefaultDecisionPromptBuilder;
+import com.openjiuwen.runtime.beta.verification.DecisionHistoryCriteriaVerifier;
+import com.openjiuwen.runtime.criteria.CriteriaOrchestrator;
 import com.openjiuwen.runtime.core.dispatch.ExecutionStrategy;
 import com.openjiuwen.runtime.core.dispatch.TaskContext;
 import com.openjiuwen.core.kernel.model.AgentEvent;
 import com.openjiuwen.core.kernel.model.Checkpoint;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Flux;
 
@@ -22,8 +27,26 @@ public class BetaStrategy implements ExecutionStrategy {
 
     private final AutonomousOrchestrator orchestrator;
 
-    public BetaStrategy(GuardrailEngine guardrailEngine) {
-        this.orchestrator = new AutonomousOrchestrator(guardrailEngine);
+    /**
+     * 单构造函数，用 ObjectProvider 可选注入 CriteriaOrchestrator。
+     * INT-001: 消除双构造函数歧义——Spring 无需选择构造函数。
+     *
+     * @param guardrailEngine 必需，Spring 注入的 GuardrailEngine
+     * @param criteriaProvider 可选，Spring 容器中有 CriteriaOrchestrator bean 时自动注入
+     */
+    public BetaStrategy(GuardrailEngine guardrailEngine,
+                        ObjectProvider<CriteriaOrchestrator> criteriaProvider) {
+        CriteriaOrchestrator co = criteriaProvider.getIfAvailable();
+        if (co != null) {
+            this.orchestrator = new AutonomousOrchestrator(
+                guardrailEngine,
+                new JsonDecisionParser(),
+                new DefaultDecisionPromptBuilder(),
+                new DecisionHistoryCriteriaVerifier(),
+                co);
+        } else {
+            this.orchestrator = new AutonomousOrchestrator(guardrailEngine);
+        }
     }
 
     @Override

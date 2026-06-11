@@ -35,6 +35,7 @@ public interface DecisionPromptBuilder {
      * @param replanCount       已 replan 次数
      * @param maxReplanCount    最大 replan 次数
      * @param stepCount         当前步数
+     * @param plan              执行计划与进度（null 表示无计划）
      */
     record DecisionContext(
         String goal,
@@ -45,6 +46,7 @@ public interface DecisionPromptBuilder {
         String reflectionHint,
         int replanCount,
         int maxReplanCount,
-        int stepCount
+        int stepCount,
+        String plan
     ) {}
 }

@@ -1,6 +1,8 @@
 package com.openjiuwen.runtime.spring;
 
 import com.openjiuwen.runtime.alpha.AlphaStrategy;
+import com.openjiuwen.runtime.beta.guardrail.GuardrailEngine;
+import com.openjiuwen.runtime.criteria.CriteriaOrchestrator;
 import com.openjiuwen.runtime.core.dispatch.AdaptiveStrategy;
 import com.openjiuwen.runtime.core.dispatch.AgentRegistry;
 import com.openjiuwen.runtime.core.dispatch.ExecutionStrategy;
@@ -188,6 +190,34 @@ public class OpenjiuwenAutoConfiguration {
         // 这里提供 @ConditionalOnMissingBean 允许开发者覆盖。
         // 如果 AlphaStrategy 没有被 component-scan 扫到，则手动创建。
         return new AlphaStrategy();
+    }
+
+    // ==================== 6.5. GuardrailEngine + CriteriaOrchestrator ====================
+
+    /**
+     * Beta 策略的 GuardrailEngine。
+     * 聚合 5 个内置护栏：预算/工具白名单/重复检测/置信度/安全。
+     * CriteriaGuardrail 在 AutonomousOrchestrator.execute() 中动态追加。
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnClass(name = "com.openjiuwen.runtime.beta.guardrail.GuardrailEngine")
+    public GuardrailEngine guardrailEngine() {
+        return new GuardrailEngine();
+    }
+
+    /**
+     * Criteria 生命周期编排器。
+     * 负责 propose → confirm → verify → accumulate → maintain 完整闭环。
+     * 默认禁用（matchIfMissing = false），需显式配置 openjiuwen.criteria.enabled=true 启用。
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnClass(name = "com.openjiuwen.runtime.criteria.CriteriaOrchestrator")
+    @ConditionalOnProperty(prefix = "openjiuwen.criteria", name = "enabled",
+        havingValue = "true", matchIfMissing = false)
+    public CriteriaOrchestrator criteriaOrchestrator() {
+        return new CriteriaOrchestrator();
     }
 
     // ==================== 7. AdaptiveStrategy ====================

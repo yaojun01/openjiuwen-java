@@ -45,5 +45,7 @@ public enum EventType {
     REPLAN_ASSESSED,    // 重规划可行性评估完成
     GOAL_DRIFT_DETECTED,// 目标漂移被检测
     CRITERIA_VERIFIED,  // 成功标准验证完成
-    KNOWLEDGE_DEPOSITED // 知识沉淀完成
+    KNOWLEDGE_DEPOSITED, // 知识沉淀完成
+    BETA_PLAN_GENERATED, // Beta plan 生成
+    BETA_PLAN_REVISED    // Beta plan 修订
 }

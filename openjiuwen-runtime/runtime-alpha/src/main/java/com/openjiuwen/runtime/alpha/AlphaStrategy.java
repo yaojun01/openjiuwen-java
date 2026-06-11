@@ -27,6 +27,7 @@ import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Alpha 策略——PEV（Plan-Execute-Verify）显式控制引擎。
@@ -71,7 +72,8 @@ public class AlphaStrategy implements ExecutionStrategy {
             try {
                 TaskId taskId = context.taskId();
                 AgentKernel kernel = context.kernel();
-                BudgetLimits budget = context.currentBudgetLimits();
+                AtomicReference<BudgetLimits> budgetRef = new AtomicReference<>(
+                    context.currentBudgetLimits());
                 ExecutionPolicy policy = resolveExecutionPolicy(context);
 
                 // 创建可插拔组件
@@ -137,8 +139,16 @@ public class AlphaStrategy implements ExecutionStrategy {
                 AtomicBoolean verifyExceeded = new AtomicBoolean(false); // COR-007: 跟踪验证失败
 
                 // R2-011: 用 concatMap 替代 doOnComplete 中的阻塞调用，避免线程饥饿
-                Disposable subscription = executor.execute(taskId, graph, policy, budget)
+                Disposable subscription = executor.execute(taskId, graph, policy, budgetRef.get())
                     .doOnNext(superstep -> {
+                        // REG-001: 按 superstep 结果数追踪 LLM/工具调用消耗
+                        int nodesThisStep = superstep.nodeResults().size();
+                        if (nodesThisStep > 0) {
+                            // 保守估计：每个节点至少 1 次 LLM 调用
+                            BudgetLimits current = budgetRef.get();
+                            budgetRef.set(current.recordLLMCall(nodesThisStep * 128));
+                        }
+
                         // 合并结果
                         completedResults.putAll(superstep.nodeResults());
 
@@ -169,7 +179,7 @@ public class AlphaStrategy implements ExecutionStrategy {
                             // ==================== Phase 3: Verify ====================
                             if (policy.verifyMode() != VerifyMode.NONE) {
                                 executeVerifyLoop(taskId, goal, graph, completedResults,
-                                    policy, budget, planner, verifier, kernel, executor, sink, 0, verifyExceeded);
+                                    policy, budgetRef, planner, verifier, kernel, executor, sink, 0, verifyExceeded);
                             }
 
                             // COR-007: 验证超限则跳过成功事件
@@ -229,7 +239,7 @@ public class AlphaStrategy implements ExecutionStrategy {
     private void executeVerifyLoop(
             TaskId taskId, PlanGoal goal, TaskGraph graph,
             Map<NodeId, Object> completedResults,
-            ExecutionPolicy policy, BudgetLimits budget,
+            ExecutionPolicy policy, AtomicReference<BudgetLimits> budgetRef,
             Planner planner, Verifier verifier, AgentKernel kernel,
             PregelExecutor executor,
             reactor.core.publisher.FluxSink<AgentEvent> sink,
@@ -240,8 +250,10 @@ public class AlphaStrategy implements ExecutionStrategy {
         VerifyResult verifyResult;
         try {
             verifyResult = verifier.verify(taskId, goal, graph,
-                completedResults, policy, budget)
+                completedResults, policy, budgetRef.get())
                 .timeout(LLM_TIMEOUT).block();
+            // REG-001: 追踪 verify LLM 调用消耗
+            budgetRef.set(budgetRef.get().recordLLMCall(256));
         } catch (Exception e) {
             sink.next(toAlphaEvent(taskId, new AlphaEvent.VerifyFailed(
                 taskId, now(), "验证超时或异常: " + e.getMessage(), Set.of())));
@@ -318,7 +330,7 @@ public class AlphaStrategy implements ExecutionStrategy {
                             goal.description() + " (局部重做)", resolvedNodes, List.of());
                         // R2-001: 收集到临时 map，成功后才合并
                         Map<NodeId, Object> reExecResults = new ConcurrentHashMap<>();
-                        executor.execute(taskId, subGraph, policy, budget)
+                        executor.execute(taskId, subGraph, policy, budgetRef.get())
                             .doOnNext(step -> reExecResults.putAll(step.nodeResults()))
                             .blockLast(LLM_TIMEOUT);
                         completedResults.putAll(reExecResults); // 只在完整成功后合并
@@ -330,7 +342,7 @@ public class AlphaStrategy implements ExecutionStrategy {
                 }
 
                 executeVerifyLoop(taskId, goal, graph, completedResults,
-                    policy, budget, planner, verifier, kernel, executor, sink,
+                    policy, budgetRef, planner, verifier, kernel, executor, sink,
                     retryCount + 1, verifyExceeded);
             }
             case ReplanStrategy.GlobalReplan _ -> {
@@ -350,12 +362,12 @@ public class AlphaStrategy implements ExecutionStrategy {
 
                         TaskGraph newGraph = newPlan.graph();
                         Map<NodeId, Object> newResults = new ConcurrentHashMap<>();
-                        executor.execute(taskId, newGraph, policy, budget)
+                        executor.execute(taskId, newGraph, policy, budgetRef.get())
                             .doOnNext(step -> newResults.putAll(step.nodeResults()))
                             .blockLast(LLM_TIMEOUT);
 
                         executeVerifyLoop(taskId, goal, newGraph, newResults,
-                            policy, budget, planner, verifier, kernel, executor, sink,
+                            policy, budgetRef, planner, verifier, kernel, executor, sink,
                             retryCount + 1, verifyExceeded);
                         return;
                     }
@@ -365,7 +377,7 @@ public class AlphaStrategy implements ExecutionStrategy {
 
                 // 降级：用旧数据重试
                 executeVerifyLoop(taskId, goal, graph, completedResults,
-                    policy, budget, planner, verifier, kernel, executor, sink,
+                    policy, budgetRef, planner, verifier, kernel, executor, sink,
                     retryCount + 1, verifyExceeded);
             }
             case ReplanStrategy.AcceptPartial _ -> {

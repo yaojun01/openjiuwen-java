@@ -2,6 +2,7 @@ package com.openjiuwen.runtime.beta.event;
 
 import com.openjiuwen.runtime.beta.model.GoalSpec;
 import com.openjiuwen.runtime.beta.model.LLMDecision;
+import com.openjiuwen.runtime.beta.plan.BetaPlan;
 import com.openjiuwen.runtime.beta.reflection.GoalAlignmentCheck;
 import com.openjiuwen.runtime.beta.reflection.ReplanFeasibilityCheck;
 import com.openjiuwen.core.kernel.model.TaskId;
@@ -33,7 +34,9 @@ public sealed interface BetaEvent
             BetaEvent.ReplanAssessed,
             BetaEvent.GoalDriftDetected,
             BetaEvent.CriteriaVerificationCompleted,
-            BetaEvent.KnowledgeDeposited {
+            BetaEvent.KnowledgeDeposited,
+            BetaEvent.PlanGenerated,
+            BetaEvent.PlanRevised {
 
     TaskId taskId();
     Instant timestamp();
@@ -118,4 +121,16 @@ public sealed interface BetaEvent
     record KnowledgeDeposited(TaskId taskId, Instant timestamp,
                               String goalPattern,
                               String executionSummary) implements BetaEvent {}
+
+    /**
+     * Beta plan 生成完成。
+     */
+    record PlanGenerated(TaskId taskId, Instant timestamp,
+                          BetaPlan plan) implements BetaEvent {}
+
+    /**
+     * Beta plan 执行中被修订。
+     */
+    record PlanRevised(TaskId taskId, Instant timestamp,
+                       BetaPlan revisedPlan) implements BetaEvent {}
 }

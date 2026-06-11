@@ -70,7 +70,7 @@ class DefaultCriteriaVerifierTest {
     @Test
     void verify_multipleCriteria_partialPass() {
         VerifiedCriterion c1 = makeCriterion("数据准确性", "必须准确");
-        VerifiedCriterion c2 = makeCriterion("时效性", "时效性分析");
+        VerifiedCriterion c2 = makeCriterion("时效性", "必须包含时效性分析");
 
         String output = "数据准确性验证通过，误差率低";
         List<CriteriaVerificationResult> results = verifier.verify(
@@ -121,7 +121,7 @@ class DefaultCriteriaVerifierTest {
     @Test
     void verify_nonDefaultSelectedTemplate_warnContinue() {
         VerifiedCriterion criterion = VerifiedCriterion.from(
-            new CriteriaProposal.TemplateProposal("时效性", "时效性分析", false), null);
+            new CriteriaProposal.TemplateProposal("时效性", "必须包含时效性分析", false), null);
 
         List<CriteriaVerificationResult> results = verifier.verify(
             List.of(criterion), "无相关内容", "");

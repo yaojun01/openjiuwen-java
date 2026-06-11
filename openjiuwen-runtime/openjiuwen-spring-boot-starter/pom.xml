@@ -16,7 +16,7 @@
     <description>Spring Boot 自动装配 + AgentClient + 健康检查</description>
 
     <dependencies>
-        <!-- 依赖 runtime-core + runtime-alpha（P1 必选策略） -->
+        <!-- 依赖 runtime-core + runtime-alpha + runtime-beta -->
         <dependency>
             <groupId>com.openjiuwen</groupId>
             <artifactId>runtime-core</artifactId>
@@ -24,6 +24,10 @@
         <dependency>
             <groupId>com.openjiuwen</groupId>
             <artifactId>runtime-alpha</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.openjiuwen</groupId>
+            <artifactId>runtime-beta</artifactId>
         </dependency>
 
         <!-- Spring Boot 自动装配 -->

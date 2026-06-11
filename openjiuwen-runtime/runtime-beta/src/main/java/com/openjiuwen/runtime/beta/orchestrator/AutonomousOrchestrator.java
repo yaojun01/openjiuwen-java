@@ -7,10 +7,18 @@ import com.openjiuwen.runtime.beta.guardrail.Guardrail;
 import com.openjiuwen.runtime.beta.guardrail.GuardrailEngine;
 import com.openjiuwen.runtime.beta.model.GoalSpec;
 import com.openjiuwen.runtime.beta.model.LLMDecision;
+import com.openjiuwen.runtime.beta.plan.BetaPlan;
+import com.openjiuwen.runtime.beta.plan.PlanGenerator;
 import com.openjiuwen.runtime.beta.reflection.DefaultGoalAlignmentCheck;
 import com.openjiuwen.runtime.beta.reflection.GoalAlignmentCheck;
 import com.openjiuwen.runtime.beta.verification.CriteriaVerifier;
 import com.openjiuwen.runtime.beta.verification.DecisionHistoryCriteriaVerifier;
+import com.openjiuwen.runtime.criteria.CriteriaOrchestrator;
+import com.openjiuwen.runtime.criteria.CriteriaGuardrail;
+import com.openjiuwen.runtime.criteria.model.CriteriaProposal;
+import com.openjiuwen.runtime.criteria.model.CriteriaVerificationResult;
+import com.openjiuwen.runtime.criteria.model.StructuredCriteria;
+import com.openjiuwen.runtime.criteria.model.VerifiedCriterion;
 import com.openjiuwen.runtime.core.engine.AgentKernel;
 import com.openjiuwen.core.kernel.model.*;
 import com.openjiuwen.runtime.core.dispatch.ExecutionStrategy;
@@ -45,6 +53,8 @@ public class AutonomousOrchestrator implements ExecutionStrategy {
     private static final int CONTEXT_WINDOW_TOKENS = 128_000;
     /** 目标漂移检查间隔：每 N 步检查一次（B4 决策） */
     private static final int ALIGNMENT_CHECK_INTERVAL = 5;
+    /** 计划进度提醒间隔：每 N 步注入一次 */
+    private static final int PLAN_REVISION_INTERVAL = 5;
 
     /** 专用 Scheduler，避免与系统默认 boundedElastic 线程池竞争 */
     private static final reactor.core.scheduler.Scheduler DECISION_LOOP_SCHEDULER =
@@ -58,6 +68,13 @@ public class AutonomousOrchestrator implements ExecutionStrategy {
     private final DecisionPromptBuilder promptBuilder;
     private final CriteriaVerifier criteriaVerifier;
     private final GoalAlignmentCheck alignmentCheck;
+    /** Criteria 生命周期编排器。null 表示不接入 criteria 模块（向后兼容）。 */
+    private final CriteriaOrchestrator criteriaOrchestrator;
+
+    /** SEC-001/F05: execute() 构建的增强 guardrail，resume() 复用 */
+    private volatile GuardrailEngine cachedEffectiveGuardrail;
+    /** SEC-001/F05: execute() 确认的 verifiedCriteria，resume() 复用 */
+    private volatile List<VerifiedCriterion> cachedVerifiedCriteria = List.of();
 
     public AutonomousOrchestrator(GuardrailEngine guardrailEngine) {
         this.guardrailEngine = guardrailEngine;
@@ -65,6 +82,7 @@ public class AutonomousOrchestrator implements ExecutionStrategy {
         this.promptBuilder = new DefaultDecisionPromptBuilder();
         this.criteriaVerifier = new DecisionHistoryCriteriaVerifier();
         this.alignmentCheck = new DefaultGoalAlignmentCheck(ALIGNMENT_CHECK_INTERVAL);
+        this.criteriaOrchestrator = null;
     }
 
     public AutonomousOrchestrator(
@@ -77,6 +95,25 @@ public class AutonomousOrchestrator implements ExecutionStrategy {
         this.promptBuilder = promptBuilder;
         this.criteriaVerifier = criteriaVerifier;
         this.alignmentCheck = new DefaultGoalAlignmentCheck(ALIGNMENT_CHECK_INTERVAL);
+        this.criteriaOrchestrator = null;
+    }
+
+    /**
+     * 完整注入构造函数（含 Criteria 生命周期）。
+     * BetaStrategy 在 CriteriaOrchestrator 可用时使用此构造函数。
+     */
+    public AutonomousOrchestrator(
+            GuardrailEngine guardrailEngine,
+            DecisionParser decisionParser,
+            DecisionPromptBuilder promptBuilder,
+            CriteriaVerifier criteriaVerifier,
+            CriteriaOrchestrator criteriaOrchestrator) {
+        this.guardrailEngine = guardrailEngine;
+        this.decisionParser = decisionParser;
+        this.promptBuilder = promptBuilder;
+        this.criteriaVerifier = criteriaVerifier;
+        this.alignmentCheck = new DefaultGoalAlignmentCheck(ALIGNMENT_CHECK_INTERVAL);
+        this.criteriaOrchestrator = criteriaOrchestrator;
     }
 
     @Override
@@ -93,15 +130,60 @@ public class AutonomousOrchestrator implements ExecutionStrategy {
 
                 AtomicReference<BudgetLimits> budgetRef = new AtomicReference<>(
                     context.currentBudgetLimits());
+
+                // === Pre-loop: propose → auto-confirm → enrich GoalSpec ===
+                String taskDescription = context.input().userInput();
+                List<VerifiedCriterion> verifiedCriteria = List.of();
+                if (criteriaOrchestrator != null) {
+                    List<CriteriaProposal> proposals =
+                        criteriaOrchestrator.propose(taskDescription, StructuredCriteria.Industry.GENERAL);
+                    if (!proposals.isEmpty()) {
+                        // 自动确认所有 defaultSelected 的模板标准；若无则取前 3
+                        List<CriteriaProposal> autoSelected = proposals.stream()
+                            .filter(p -> p instanceof CriteriaProposal.TemplateProposal tp
+                                         && tp.defaultSelected())
+                            .toList();
+                        if (autoSelected.isEmpty()) {
+                            autoSelected = proposals.stream().limit(3).toList();
+                        }
+                        if (!autoSelected.isEmpty()) {
+                            verifiedCriteria = criteriaOrchestrator.confirm(autoSelected);
+                        }
+                    }
+                }
+
                 AtomicReference<GoalSpec> goalRef = new AtomicReference<>(
-                    GoalSpec.of(context.input().userInput()));
+                    verifiedCriteria.isEmpty()
+                        ? GoalSpec.of(taskDescription)
+                        : criteriaOrchestrator.buildGoalSpec(taskDescription, verifiedCriteria));
+
+                // === 增强 GuardrailEngine：追加 CriteriaGuardrail ===
+                // COR-007: 基于原始 guardrailEngine 追加，而非创建新实例（保留自定义护栏）
+                GuardrailEngine effectiveGuardrail = verifiedCriteria.isEmpty()
+                    ? guardrailEngine
+                    : guardrailEngine.withExtra(new CriteriaGuardrail(verifiedCriteria));
+
+                // SEC-001/F05: 缓存供 resume() 复用
+                cachedEffectiveGuardrail = effectiveGuardrail;
+                cachedVerifiedCriteria = verifiedCriteria;
+
+                // === 生成初始计划（可变步骤列表，不是 Alpha 的 DAG） ===
+                PlanGenerator planGenerator = new PlanGenerator();
+                AtomicReference<BetaPlan> planRef = new AtomicReference<>(
+                    planGenerator.generate(kernel, goalRef.get(), budgetRef.get()));
+                if (planRef.get().steps().isEmpty()) {
+                    planRef.set(BetaPlan.empty()); // 向后兼容
+                } else {
+                    emitBetaEvent(sink, taskId, new BetaEvent.PlanGenerated(
+                        taskId, now(), planRef.get()));
+                }
 
                 ContextWindowManager ctxManager = new ContextWindowManager(CONTEXT_WINDOW_TOKENS);
                 SelfReflectionTrigger reflectionTrigger = new SelfReflectionTrigger();
 
                 // 分析目标
                 emitBetaEvent(sink, taskId, new BetaEvent.GoalAnalyzed(
-                    taskId, now(), goalRef.get(), List.of()));
+                    taskId, now(), goalRef.get(), goalRef.get().successCriteria()));
 
                 // 初始化上下文
                 ctxManager.addMessage(new ContextWindowManager.ContextMessage(
@@ -112,7 +194,9 @@ public class AutonomousOrchestrator implements ExecutionStrategy {
                 List<LLMDecision> decisionHistory = new ArrayList<>();
 
                 runDecisionLoop(sink, context, kernel, budgetRef, goalRef,
-                    ctxManager, reflectionTrigger, decisionHistory, 0);
+                    ctxManager, reflectionTrigger, decisionHistory, 0,
+                    verifiedCriteria, criteriaOrchestrator, effectiveGuardrail,
+                    planRef, planGenerator);
 
             } catch (Exception e) {
                 emitEvent(sink, context.taskId(), EventType.TASK_FAILED, e.getMessage());
@@ -156,8 +240,18 @@ public class AutonomousOrchestrator implements ExecutionStrategy {
                     "从 checkpoint 恢复，步数=" + iteration);
 
                 // 进入主决策循环（与 execute 相同）
+                // COR-005: 传递 criteriaOrchestrator 实例（而非 null），保持 criteria 生命周期
+                // SEC-001: 复用 execute() 构建的 effectiveGuardrail（含 CriteriaGuardrail）
+                // F05: 复用 execute() 确认的 verifiedCriteria，保证 post-criteria 生命周期完整
+                // Plan: resume 不恢复 plan（checkpoint 序列化留后续），用 empty plan
+                GuardrailEngine resumeGuardrail = cachedEffectiveGuardrail != null
+                    ? cachedEffectiveGuardrail : guardrailEngine;
+                List<VerifiedCriterion> resumeCriteria = cachedVerifiedCriteria != null
+                    ? cachedVerifiedCriteria : List.of();
                 runDecisionLoop(sink, context, kernel, budgetRef, goalRef,
-                    ctxManager, reflectionTrigger, decisionHistory, iteration);
+                    ctxManager, reflectionTrigger, decisionHistory, iteration,
+                    resumeCriteria, criteriaOrchestrator, resumeGuardrail,
+                    new AtomicReference<>(BetaPlan.empty()), new PlanGenerator());
 
             } catch (Exception e) {
                 emitEvent(sink, context.taskId(), EventType.TASK_FAILED, e.getMessage());
@@ -271,7 +365,12 @@ public class AutonomousOrchestrator implements ExecutionStrategy {
             ContextWindowManager ctxManager,
             SelfReflectionTrigger reflectionTrigger,
             List<LLMDecision> decisionHistory,
-            int startIteration) {
+            int startIteration,
+            List<VerifiedCriterion> verifiedCriteria,
+            CriteriaOrchestrator criteriaOrch,
+            GuardrailEngine effectiveGuardrail,
+            AtomicReference<BetaPlan> planRef,
+            PlanGenerator planGenerator) {
 
         TaskId taskId = context.taskId();
         int iteration = startIteration;
@@ -304,7 +403,7 @@ public class AutonomousOrchestrator implements ExecutionStrategy {
             // ===== 步骤 3: 构造决策 Prompt =====
             DecisionPromptBuilder.DecisionContext promptCtx = buildPromptContext(
                 goalRef.get(), decisionHistory, budgetRef.get(), ctxManager,
-                reflectionHint, iteration);
+                reflectionHint, iteration, planRef.get());
             String decisionPrompt = promptBuilder.build(promptCtx);
 
             // ===== 步骤 4: LLM 推理 =====
@@ -325,7 +424,7 @@ public class AutonomousOrchestrator implements ExecutionStrategy {
             // ===== 步骤 6: GuardrailEngine 检查 =====
             Guardrail.GuardrailContext guardCtx = new Guardrail.GuardrailContext(
                 taskId, budgetRef.get(), List.copyOf(decisionHistory), Map.of());
-            Guardrail.GuardrailResult guardResult = guardrailEngine.evaluate(decision, guardCtx);
+            Guardrail.GuardrailResult guardResult = effectiveGuardrail.evaluate(decision, guardCtx);
 
             if (!guardResult.passed()) {
                 emitBetaEvent(sink, taskId, new BetaEvent.GuardrailTriggered(
@@ -347,6 +446,16 @@ public class AutonomousOrchestrator implements ExecutionStrategy {
             emitBetaEvent(sink, taskId, new BetaEvent.DecisionMade(
                 taskId, now(), decision, iteration));
 
+            // ===== 步骤 7.5: 计划进度跟踪 =====
+            // 非终止决策后自动推进一步（LLM 看到计划，自主执行，我们信任它前进一步）
+            BetaPlan currentPlan = planRef.get();
+            if (currentPlan.hasPending()
+                    && !(decision instanceof LLMDecision.Replan)
+                    && !(decision instanceof LLMDecision.Complete)
+                    && !(decision instanceof LLMDecision.GiveUp)) {
+                planRef.set(currentPlan.markCurrentDone());
+            }
+
             // ===== 步骤 8: Replan 超限处理（B2: ESCALATE） =====
             if (decision instanceof LLMDecision.Replan replan) {
                 GoalSpec currentGoal = goalRef.get();
@@ -361,6 +470,13 @@ public class AutonomousOrchestrator implements ExecutionStrategy {
                 } else {
                     goalRef.set(currentGoal.withReplan(new GoalSpec.ReplanRecord(
                         iteration, replan.replanReason(), replan.newApproach())));
+                    // Replan 后重新生成计划
+                    BetaPlan revised = planGenerator.generate(kernel, goalRef.get(), budgetRef.get());
+                    if (revised.hasPending()) {
+                        planRef.set(revised);
+                        emitBetaEvent(sink, taskId, new BetaEvent.PlanRevised(
+                            taskId, now(), revised));
+                    }
                 }
             }
 
@@ -410,7 +526,7 @@ public class AutonomousOrchestrator implements ExecutionStrategy {
                 }
             }
 
-            // ===== 步骤 10: 每 N 步检查目标漂移（B4） =====
+            // ===== 步骤 10: 每 N 步检查目标漂移 + 计划进度提醒（B4） =====
             if (!(decision instanceof LLMDecision.Complete) && iteration > 0
                     && iteration % ALIGNMENT_CHECK_INTERVAL == 0) {
                 var alignment = alignmentCheck.checkAlignment(
@@ -421,6 +537,19 @@ public class AutonomousOrchestrator implements ExecutionStrategy {
                     emitBetaEvent(sink, taskId, new BetaEvent.GoalDriftDetected(
                         taskId, now(), alignment));
                 }
+
+                // 计划进度提醒
+                BetaPlan plan = planRef.get();
+                if (plan.hasPending()) {
+                    long done = plan.steps().stream()
+                        .filter(s -> s.status() == com.openjiuwen.runtime.beta.plan.PlanStep.StepStatus.DONE).count();
+                    long pending = plan.steps().stream()
+                        .filter(s -> s.status() == com.openjiuwen.runtime.beta.plan.PlanStep.StepStatus.PENDING).count();
+                    ctxManager.addMessage(new ContextWindowManager.ContextMessage(
+                        "system",
+                        String.format("[计划进度提醒] 共 %d 步，已完成 %d 步，剩余 %d 步。请按计划执行，或通过 replan 修改计划。",
+                            plan.steps().size(), done, pending)));
+                }
             }
 
             // ===== 步骤 11: 执行决策 =====
@@ -429,6 +558,28 @@ public class AutonomousOrchestrator implements ExecutionStrategy {
                 ctxManager, reflectionTrigger, sink, goalRef.get(), decisionHistory);
 
             if (completed) {
+                // === Post-loop: verify → accumulate → maintain ===
+                // COR-006: 在 TASK_COMPLETED 之前运行，保证事件顺序
+                // COR-010: GiveUp 也触发知识积累（从失败任务学习）
+                if (criteriaOrch != null && !verifiedCriteria.isEmpty()
+                        && (decision instanceof LLMDecision.Complete
+                            || decision instanceof LLMDecision.GiveUp)) {
+                    postExecutionCriteriaLifecycle(
+                        sink, taskId, criteriaOrch,
+                        verifiedCriteria, decisionHistory);
+                }
+
+                // COR-006: 统一在 post-criteria 之后发射完成事件
+                if (decision instanceof LLMDecision.Complete complete) {
+                    emitBetaEvent(sink, taskId, new BetaEvent.BetaCompleted(
+                        taskId, now(), complete.output(), true));
+                    emitEvent(sink, taskId, EventType.TASK_COMPLETED, complete.output());
+                } else if (decision instanceof LLMDecision.GiveUp giveUp) {
+                    emitBetaEvent(sink, taskId, new BetaEvent.BetaCompleted(
+                        taskId, now(), giveUp.partialResult(), false));
+                    emitEvent(sink, taskId, EventType.TASK_FAILED, giveUp.reason());
+                }
+
                 sink.complete();
                 return;
             }
@@ -510,17 +661,12 @@ public class AutonomousOrchestrator implements ExecutionStrategy {
 
             case LLMDecision.Complete complete -> {
                 reflectionTrigger.recordNonToolDecision();
-                emitBetaEvent(sink, taskId, new BetaEvent.BetaCompleted(
-                    taskId, now(), complete.output(), true));
-                emitEvent(sink, taskId, EventType.TASK_COMPLETED, complete.output());
+                // COR-006: 不在此处发射 TASK_COMPLETED，由 completed 块统一发射
                 yield true;
             }
 
             case LLMDecision.GiveUp giveUp -> {
                 reflectionTrigger.recordNonToolDecision();
-                emitBetaEvent(sink, taskId, new BetaEvent.BetaCompleted(
-                    taskId, now(), giveUp.partialResult(), false));
-                emitEvent(sink, taskId, EventType.TASK_FAILED, giveUp.reason());
                 yield true;
             }
         };
@@ -531,7 +677,8 @@ public class AutonomousOrchestrator implements ExecutionStrategy {
     private DecisionPromptBuilder.DecisionContext buildPromptContext(
             GoalSpec goal, List<LLMDecision> history,
             BudgetLimits budgetLimits, ContextWindowManager ctxManager,
-            String reflectionHint, int iteration) {
+            String reflectionHint, int iteration,
+            BetaPlan plan) {
 
         return new DecisionPromptBuilder.DecisionContext(
             goal.goal(),
@@ -542,7 +689,8 @@ public class AutonomousOrchestrator implements ExecutionStrategy {
             reflectionHint,
             goal.replanCount(),
             goal.maxReplanCount(),
-            iteration
+            iteration,
+            plan.formatForPrompt()
         );
     }
 
@@ -585,6 +733,60 @@ public class AutonomousOrchestrator implements ExecutionStrategy {
         return s.length() > maxLen ? s.substring(0, maxLen) + "...(truncated)" : s;
     }
 
+    // ==================== Criteria 生命周期辅助 ====================
+
+    /**
+     * Post-execution criteria lifecycle: verify → accumulate → maintain。
+     * 在 sink.complete() 前调用，可以继续发射事件。
+     */
+    private void postExecutionCriteriaLifecycle(
+            reactor.core.publisher.FluxSink<AgentEvent> sink,
+            TaskId taskId,
+            CriteriaOrchestrator orchestrator,
+            List<VerifiedCriterion> verifiedCriteria,
+            List<LLMDecision> decisionHistory) {
+
+        String finalOutput = extractPartialResult(decisionHistory);
+        String execLog = buildExecutionLog(decisionHistory);
+
+        // Step 4: 深度验证
+        List<CriteriaVerificationResult> results =
+            orchestrator.verify(verifiedCriteria, finalOutput, execLog);
+
+        emitBetaEvent(sink, taskId, new BetaEvent.CriteriaVerificationCompleted(
+            taskId, now(),
+            results.stream()
+                .filter(r -> !r.isSatisfied())
+                .<Violation>map(r -> new Violation.CriteriaNotCovered(
+                    r.criterion().dimension(), r.evidence()))
+                .toList(),
+            orchestrator.isAllSatisfied(results)));
+
+        // Step 5: 知识沉淀
+        if (!results.isEmpty()) {
+            orchestrator.accumulate(verifiedCriteria, results,
+                StructuredCriteria.Industry.GENERAL);
+            emitBetaEvent(sink, taskId, new BetaEvent.KnowledgeDeposited(
+                taskId, now(), "criteria-verification",
+                "通过率: " + (orchestrator.isAllSatisfied(results) ? "100%" : "部分未通过")));
+        }
+
+        // Step 6: 知识维护
+        orchestrator.maintain();
+    }
+
+    private String buildExecutionLog(List<LLMDecision> history) {
+        return history.stream()
+            .map(d -> switch (d) {
+                case LLMDecision.CallTool ct -> "工具调用: " + ct.toolName().value();
+                case LLMDecision.ContinueThinking t -> "思考: " + truncate(t.thought(), 200);
+                case LLMDecision.Replan r -> "重规划: " + r.replanReason();
+                default -> "";
+            })
+            .filter(s -> !s.isBlank())
+            .collect(Collectors.joining("\n"));
+    }
+
     // ==================== 事件辅助 ====================
 
     private Instant now() { return Instant.now(); }
@@ -614,6 +816,8 @@ public class AutonomousOrchestrator implements ExecutionStrategy {
             case BetaEvent.GoalDriftDetected gd         -> EventType.GOAL_DRIFT_DETECTED;
             case BetaEvent.CriteriaVerificationCompleted cv -> EventType.CRITERIA_VERIFIED;
             case BetaEvent.KnowledgeDeposited kd        -> EventType.KNOWLEDGE_DEPOSITED;
+            case BetaEvent.PlanGenerated pg             -> EventType.BETA_PLAN_GENERATED;
+            case BetaEvent.PlanRevised pr               -> EventType.BETA_PLAN_REVISED;
         };
     }
 }
