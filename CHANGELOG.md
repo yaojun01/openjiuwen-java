@@ -6,6 +6,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.3.0] - 2026-06-11
+
+### P1 + P2 全量对抗审查闭环
+
+6 维度并行扫描（正确性/安全/响应式/集成/测试/Alpha+Core）→ 去重 → 12 对抗验证器（4 组 × 3 投票）→ 综合报告。60%+ 发现被对抗验证降级，所有 BLOCKER/HIGH/MEDIUM 修复完毕。
+
+**审查规模**：11 模块 / 195 tests | **最终测试**：195 tests, 0 failures
+
+#### BLOCKER 修复 (4)
+
+- **INT-001** `openjiuwen-spring-boot-starter/pom.xml`: 添加 `runtime-beta` 依赖，starter 只引了 runtime-alpha
+- **INT-002** `OpenjiuwenAutoConfiguration`: 注册 `GuardrailEngine` + `CriteriaOrchestrator` Bean（Beta 策略启动时拿不到 Spring 管理的实例）
+- **SEC-001** `AutonomousOrchestrator.resume()`: execute() 构建的增强 guardrail（含 CriteriaGuardrail）在 resume() 中丢失，改为 volatile 缓存复用
+- **F05** `AutonomousOrchestrator.resume()`: 传空 `List.of()` 给决策循环，postExecutionCriteriaLifecycle 永远不触发
+
+#### HIGH 修复 (2)
+
+- **REG-001** `AlphaStrategy.execute()`: BudgetLimits 无追踪，改为 `AtomicReference<BudgetLimits>` + `recordLLMCall()` 按 superstep 追踪
+- **REACT-001** `PlanGenerator.generate()`: async Mono + 双层 `onErrorResume` 静默吞掉 SafetyViolationException，改为同步方法
+
+#### MEDIUM 修复 (3)
+
+- **REACT-004** `BetaStrategy`: 实现 `DisposableBean`，shutdown 时 dispose `DECISION_LOOP_SCHEDULER` 防止线程泄漏
+- **F01** `AutonomousOrchestrator.extractPartialResult()`: 增加 `GiveUp.partialResult()` 回退，放弃任务时保留中间结果
+- **INT-010** 删除死代码 `CriteriaAwareGuardrailEngine`（零调用方）
+
+#### 测试修复 (2 pre-existing)
+
+- `DefaultCriteriaVerifierTest`: 2 个测试描述缺少规则关键词导致走 Inconclusive 路径，修正描述使规则检查生效
+
+---
+
 ## [0.2.1] - 2026-06-11
 
 ### Criteria 模块四轮对抗审查
