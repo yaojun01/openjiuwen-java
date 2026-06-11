@@ -10,6 +10,7 @@ import com.openjiuwen.runtime.core.dispatch.ExecutionStrategy;
 import com.openjiuwen.runtime.core.dispatch.TaskContext;
 import com.openjiuwen.core.kernel.model.AgentEvent;
 import com.openjiuwen.core.kernel.model.Checkpoint;
+import org.springframework.beans.factory.DisposableBean;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Flux;
@@ -23,7 +24,7 @@ import reactor.core.publisher.Flux;
  * 安全网由 Orchestrator 内部通过 GuardrailEngine、SafetyBoundary、Budget 控制。
  */
 @Component("beta")
-public class BetaStrategy implements ExecutionStrategy {
+public class BetaStrategy implements ExecutionStrategy, DisposableBean {
 
     private final AutonomousOrchestrator orchestrator;
 
@@ -62,5 +63,11 @@ public class BetaStrategy implements ExecutionStrategy {
     @Override
     public Flux<AgentEvent> resume(TaskContext context, Checkpoint checkpoint) {
         return orchestrator.resume(context, checkpoint);
+    }
+
+    /** REACT-004: 应用关闭时释放决策循环线程池 */
+    @Override
+    public void destroy() {
+        AutonomousOrchestrator.disposeScheduler();
     }
 }

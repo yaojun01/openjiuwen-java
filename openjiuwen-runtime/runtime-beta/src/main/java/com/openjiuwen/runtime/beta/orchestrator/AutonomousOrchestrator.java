@@ -116,6 +116,11 @@ public class AutonomousOrchestrator implements ExecutionStrategy {
         this.criteriaOrchestrator = criteriaOrchestrator;
     }
 
+    /** REACT-004: 应用关闭时释放决策循环线程池，由 BetaStrategy @PreDestroy 调用 */
+    public static void disposeScheduler() {
+        DECISION_LOOP_SCHEDULER.dispose();
+    }
+
     @Override
     public String name() {
         return "beta";
@@ -716,12 +721,28 @@ public class AutonomousOrchestrator implements ExecutionStrategy {
         return tools.isBlank() ? "请参考系统提示中的工具列表" : tools;
     }
 
+    /**
+     * 提取部分结果：优先取最后的 Complete 输出，其次取最后的 GiveUp.partialResult。
+     * F01: 之前只过滤 Complete，GiveUp 场景永远返回"无部分结果"。
+     */
     private String extractPartialResult(List<LLMDecision> history) {
-        return history.stream()
+        // 优先取最后一个 Complete 的输出
+        String lastComplete = history.stream()
             .filter(d -> d instanceof LLMDecision.Complete)
             .map(d -> ((LLMDecision.Complete) d).output())
             .reduce((a, b) -> b)
-            .orElse("无部分结果");
+            .orElse(null);
+        if (lastComplete != null) return lastComplete;
+
+        // F01: 回退到 GiveUp.partialResult
+        String lastGiveUp = history.stream()
+            .filter(d -> d instanceof LLMDecision.GiveUp gu && gu.partialResult() != null && !gu.partialResult().isBlank())
+            .map(d -> ((LLMDecision.GiveUp) d).partialResult())
+            .reduce((a, b) -> b)
+            .orElse(null);
+        if (lastGiveUp != null) return lastGiveUp;
+
+        return "无部分结果";
     }
 
     private int estimateTokens(String text) {
