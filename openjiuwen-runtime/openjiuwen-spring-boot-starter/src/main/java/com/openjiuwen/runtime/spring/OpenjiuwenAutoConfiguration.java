@@ -22,6 +22,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.actuate.health.HealthIndicator;
 import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
 
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
@@ -106,6 +107,24 @@ public class OpenjiuwenAutoConfiguration {
             case "jdbc" -> createJdbcCheckpointStore(properties);
             default -> createInMemoryCheckpointStore();
         };
+    }
+
+    // ==================== 2.5. Spring AI LLM Provider Bridge ====================
+
+    /**
+     * 当 Spring AI ChatModel 存在时，自动创建 LLMProvider。
+     * ChatModel.call(String) 签名与 LLMProvider.call(String) 一致，桥接只需方法引用。
+     * 无 ChatModel 时（如测试环境），agentKernel 中的 ObjectProvider 回退到占位符。
+     */
+    @Configuration
+    @ConditionalOnClass(name = "org.springframework.ai.chat.model.ChatModel")
+    static class SpringAiLlmProviderConfiguration {
+        @Bean
+        @ConditionalOnMissingBean(DefaultAgentKernel.LLMProvider.class)
+        public DefaultAgentKernel.LLMProvider springAiLlmProvider(
+                org.springframework.ai.chat.model.ChatModel chatModel) {
+            return chatModel::call;
+        }
     }
 
     // ==================== 3. AgentKernel ====================
