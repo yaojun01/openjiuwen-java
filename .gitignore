@@ -1,5 +1,5 @@
-target/
 *.class
-target/
-.idea/
 *.iml
+.idea/
+target/
+test-alpha-glm.sh

@@ -1,1 +1,2 @@
 com.openjiuwen.runtime.spring.OpenjiuwenAutoConfiguration
+com.openjiuwen.runtime.spring.AgentKernelHealthAutoConfiguration

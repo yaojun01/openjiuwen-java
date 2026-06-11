@@ -20,7 +20,6 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
-import org.springframework.boot.actuate.health.HealthIndicator;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -290,24 +289,6 @@ public class OpenjiuwenAutoConfiguration {
         havingValue = "true", matchIfMissing = true)
     public AgentBeanPostProcessor agentBeanPostProcessor() {
         return new AgentBeanPostProcessor();
-    }
-
-    // ==================== 11. HealthIndicator ====================
-
-    /**
-     * Actuator 健康检查。
-     * 在 /actuator/health 端点展示 Runtime 状态。
-     * 只在 classpath 上有 spring-boot-actuator 时激活。
-     */
-    @Bean
-    @ConditionalOnClass(HealthIndicator.class)
-    @ConditionalOnMissingBean(name = "agentKernelHealthIndicator")
-    public AgentKernelHealthIndicator agentKernelHealthIndicator(
-            AgentKernel kernel,
-            AgentRegistry registry,
-            SafetyBoundary safetyBoundary,
-            OpenjiuwenProperties properties) {
-        return new AgentKernelHealthIndicator(kernel, registry, safetyBoundary, properties);
     }
 
     // ==================== Private Helpers ====================

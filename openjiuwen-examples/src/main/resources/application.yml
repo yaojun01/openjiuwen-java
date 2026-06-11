@@ -13,7 +13,7 @@ openjiuwen:
       timeout-seconds: 300
   alpha:
     planning-mode: AUTO
-    verify-mode: AUTO
+    verify-mode: LIGHT
     max-retries: 3
     parallelism: 4
   security:
