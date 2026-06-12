@@ -51,8 +51,10 @@ import java.util.concurrent.atomic.AtomicInteger;
 public class DefaultPregelExecutor implements PregelExecutor, AutoCloseable { // COR-001: AutoCloseable
 
     private static final int MAX_SUB_AGENT_DEPTH = 3;
-    private static final long NODE_TIMEOUT_MS = 60_000L; // 单节点超时 60 秒
-    private static final long LAYER_TIMEOUT_MS = 120_000L; // NEW-012: 层级超时上限 120 秒
+    // think() 已内置 idle-timeout（连续 30s 无 chunk 即判卡死快速失败），layerTimeout 降为"绝对上限防失控"，
+    // 不再是主要失败原因。放宽以容忍健康慢的总时长——否则汇聚节点总耗时 >60s 仍会被 BSP 屏障误杀。
+    private static final long NODE_TIMEOUT_MS = 180_000L; // 单节点超时上限 180 秒（原 60s）
+    private static final long LAYER_TIMEOUT_MS = 300_000L; // 层级超时上限 300 秒（原 120s）
 
     private final TaskContext context;
     private final AgentKernel kernel;

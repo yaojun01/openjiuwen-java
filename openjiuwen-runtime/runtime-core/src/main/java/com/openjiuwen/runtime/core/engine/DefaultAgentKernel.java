@@ -5,6 +5,7 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
@@ -59,34 +60,38 @@ public class DefaultAgentKernel implements AgentKernel {
         this.safetyBoundary = Objects.requireNonNull(safetyBoundary);
     }
 
+    /** think 的 idle-timeout：流式调用时若连续 IDLE_TIMEOUT_SECONDS 无 chunk 则判卡死，快速失败。
+     *  健康慢（持续 decode）每来一个 chunk 重置计时，永不撞此阈值 —— 治本 LLM 慢响应适配。
+     *  详见 memory [[hierarchy1-streaming-refactor-plan]]。 */
+    private static final long IDLE_TIMEOUT_SECONDS = 30L;
+
     // ==================== 系统调用 1: think ====================
 
     @Override
     public Mono<String> think(String prompt, BudgetLimits budget) {
         return Mono.fromCallable(() -> {
-            // 前置检查：预算
-            List<Violation> budgetViolations = safetyBoundary.checkBudget(budget);
-            if (!budgetViolations.isEmpty()) {
-                throw new SafetyViolationException("预算不足", budgetViolations);
-            }
-
-            // 调用 LLM
-            String output = llmProvider.call(prompt);
-
-            // 后置检查：输出安全性
-            List<Violation> outputViolations = safetyBoundary.checkLLMOutput(output);
-            if (!outputViolations.isEmpty()) {
-                // 对 CRITICAL 级别的违规直接抛出
+                // 前置检查：预算
+                List<Violation> budgetViolations = safetyBoundary.checkBudget(budget);
+                if (!budgetViolations.isEmpty()) {
+                    throw new SafetyViolationException("预算不足", budgetViolations);
+                }
+                return true; // 仅触发检查，返回值驱动后续 flatMap
+            })
+            .flatMap(ignored -> llmProvider.stream(prompt)
+                .timeout(Duration.ofSeconds(IDLE_TIMEOUT_SECONDS))   // idle-timeout 治本
+                .reduce(new StringBuilder(), StringBuilder::append)
+                .map(StringBuilder::toString))
+            .flatMap(output -> {
+                // 后置检查：输出安全性
+                List<Violation> outputViolations = safetyBoundary.checkLLMOutput(output);
                 boolean hasCritical = outputViolations.stream()
                     .anyMatch(v -> v.severity() == Violation.Severity.CRITICAL);
                 if (hasCritical) {
-                    throw new SafetyViolationException("LLM 输出违规", outputViolations);
+                    return Mono.error(new SafetyViolationException("LLM 输出违规", outputViolations));
                 }
-                // 非 CRITICAL 的记录日志但放行
-            }
-
-            return output;
-        });
+                // 非 CRITICAL 放行（同原行为）
+                return Mono.just(output);
+            });
     }
 
     // ==================== 系统调用 2: invokeTool ====================
@@ -198,10 +203,18 @@ public class DefaultAgentKernel implements AgentKernel {
 
     /**
      * LLM 调用抽象。由 Spring AI ChatModel 实现。
+     *
+     * <p>call() 为非流式整包调用；stream() 为流式调用（每 chunk 一个 String）。
+     * think() 默认走 stream() 以获得 idle-timeout 语义（健康慢不被误杀、卡死快速失败）。
+     * 无流式能力的 provider（如测试 MockChatModel）只需实现 call()，stream() 退化为单元素流。
      */
-    @FunctionalInterface
     public interface LLMProvider {
         String call(String prompt);
+
+        /** 流式调用。默认退化为单元素流（兼容无流式能力的 provider）。 */
+        default Flux<String> stream(String prompt) {
+            return Flux.just(call(prompt));
+        }
     }
 
     /**

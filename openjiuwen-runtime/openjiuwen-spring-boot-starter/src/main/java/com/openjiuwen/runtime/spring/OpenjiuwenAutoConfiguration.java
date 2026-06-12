@@ -122,7 +122,19 @@ public class OpenjiuwenAutoConfiguration {
         @ConditionalOnMissingBean(DefaultAgentKernel.LLMProvider.class)
         public DefaultAgentKernel.LLMProvider springAiLlmProvider(
                 org.springframework.ai.chat.model.ChatModel chatModel) {
-            return chatModel::call;
+            // 覆写 stream()：用 Spring AI 原生 SSE（chatModel.stream(String) → Flux<String>），
+            // 供 DefaultAgentKernel.think() 流式聚合 + idle-timeout（健康慢不被误杀、卡死快速失败）。
+            // call() 保留为非流式入口。
+            return new DefaultAgentKernel.LLMProvider() {
+                @Override
+                public String call(String prompt) {
+                    return chatModel.call(prompt);
+                }
+                @Override
+                public reactor.core.publisher.Flux<String> stream(String prompt) {
+                    return chatModel.stream(prompt);
+                }
+            };
         }
     }
 
