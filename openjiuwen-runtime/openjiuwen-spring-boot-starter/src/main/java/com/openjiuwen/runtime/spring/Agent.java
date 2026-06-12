@@ -1,6 +1,7 @@
 package com.openjiuwen.runtime.spring;
 
 import com.openjiuwen.core.dispatch.AutonomyLevel;
+import org.springframework.stereotype.Component;
 
 import java.lang.annotation.*;
 
@@ -27,6 +28,10 @@ import java.lang.annotation.*;
 @Target(ElementType.TYPE)
 @Retention(RetentionPolicy.RUNTIME)
 @Documented
+@Component   // 元注解 @Component：让 @Agent 类被 Spring 组件扫描识别为 Bean。文档承诺
+             // 「用法与 @Service 完全一致」，但此前漏了 @Component，导致 @Agent 类不被实例化、
+             // AgentBeanPostProcessor 无法处理 → @Tool 永不注册、AgentRegistry 为空。Alpha 纯 LLM
+             // 路径不依赖 AgentDefinition 故能跑通，而 TOOL_CALL 路径会全部失败。
 public @interface Agent {
 
     /**

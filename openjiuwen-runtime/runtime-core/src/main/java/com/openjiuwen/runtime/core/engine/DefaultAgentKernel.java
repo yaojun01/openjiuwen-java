@@ -49,7 +49,12 @@ public class DefaultAgentKernel implements AgentKernel {
         SafetyBoundary safetyBoundary
     ) {
         this.llmProvider = Objects.requireNonNull(llmProvider);
-        this.toolExecutors = new ConcurrentHashMap<>(toolExecutors);
+        // 持有共享 Map 引用而非防御性拷贝：@Tool 由 AgentBeanPostProcessor 在 kernel 构造后
+        // 动态注册到该 Spring 单例 Map（OpenjiuwenAutoConfiguration#toolExecutors +
+        // AgentBeanPostProcessor#registerToolExecutor）。拷贝会切断关联，使运行期注册的工具
+        // 对 kernel 不可见（invokeTool 在拷贝快照里查不到 → "工具未注册"），导致所有真实
+        // @Tool 的 TOOL_CALL 执行失败。调用方应传入 ConcurrentHashMap 以支持并发注册与查找。
+        this.toolExecutors = Objects.requireNonNull(toolExecutors);
         this.checkpointStore = Objects.requireNonNull(checkpointStore);
         this.safetyBoundary = Objects.requireNonNull(safetyBoundary);
     }

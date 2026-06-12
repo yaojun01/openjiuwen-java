@@ -138,7 +138,7 @@ public class OpenjiuwenAutoConfiguration {
             SafetyBoundary safetyBoundary,
             DefaultAgentKernel.CheckpointStore checkpointStore,
             ObjectProvider<DefaultAgentKernel.LLMProvider> llmProvider,
-            ObjectProvider<Map<ToolName, DefaultAgentKernel.ToolExecutor>> toolExecutors,
+            Map<ToolName, DefaultAgentKernel.ToolExecutor> tools,
             OpenjiuwenProperties properties) {
 
         // LLM 提供者：优先注入，否则用占位符
@@ -146,9 +146,11 @@ public class OpenjiuwenAutoConfiguration {
             prompt -> "[LLM placeholder for: " + prompt.substring(0, Math.min(50, prompt.length())) + "...]"
         );
 
-        Map<ToolName, DefaultAgentKernel.ToolExecutor> tools =
-            toolExecutors.getIfAvailable(HashMap::new);
-
+        // 直接注入共享 toolExecutors bean 引用（而非 ObjectProvider.getIfAvailable(HashMap::new)）：
+        // ObjectProvider 延迟解析，当 agentKernel 创建早于 toolExecutors bean 时会返回 fallback 的
+        // 临时空 HashMap，导致 kernel 持有的不是共享 Map —— @Tool 运行期注册的工具对 kernel 不可见。
+        // 直接注入为硬依赖，强制 Spring 先创建 toolExecutors bean，kernel 持有其引用，后续
+        // AgentBeanPostProcessor 注册的工具即能被 kernel.invokeTool 查到。
         return new DefaultAgentKernel(provider, tools, checkpointStore, safetyBoundary);
     }
 

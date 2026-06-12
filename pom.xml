@@ -100,6 +100,9 @@
                     <target>21</target>
                     <compilerArgs>
                         <arg>--enable-preview</arg>
+                        <!-- 保留参数名到字节码，供 @Tool 参数反射注入（AgentBeanPostProcessor 按 param.getName() 匹配 args）。
+                             Spring Boot parent pom 默认开启，本项目未继承 parent 故补上。纯增量信息，无行为回归。 -->
+                        <arg>-parameters</arg>
                     </compilerArgs>
                 </configuration>
             </plugin>
