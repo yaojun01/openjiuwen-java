@@ -123,6 +123,29 @@ public class AgentClient {
     }
 
     /**
+     * 调用 Agent 并获取完整事件流（带参数版本）。
+     *
+     * 与 {@link #invoke(String, Map)} 对称：允许通过 parameters 传入结构化上下文，
+     * 例如 Alpha 规划所需的 {@code availableTools}（可用工具名列表）和 {@code successCriteria}。
+     *
+     * @param agentName  Agent 名称
+     * @param parameters 结构化参数；其中的 "userInput" 作为用户输入文本，其余进入 TaskInput.parameters()
+     * @return Flux&lt;AgentEvent&gt; 完整事件流
+     */
+    public Flux<AgentEvent> invokeStream(String agentName, Map<String, Object> parameters) {
+        String userInput = (String) parameters.getOrDefault("userInput", "");
+        TaskInput input = TaskInput.of(userInput, parameters);
+
+        TaskId taskId = new TaskId(UUID.randomUUID().toString());
+        TaskContext context = buildTaskContext(taskId, agentName, input);
+
+        activeTasks.put(taskId, new TaskStatus.Executing());
+
+        return adaptiveStrategy.execute(context)
+            .doFinally(signal -> activeTasks.remove(taskId));
+    }
+
+    /**
      * 获取活跃任务数量。
      */
     public int activeTaskCount() {
