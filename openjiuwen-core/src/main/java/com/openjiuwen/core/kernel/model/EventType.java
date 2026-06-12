@@ -10,7 +10,10 @@ public enum EventType {
     // --- 通用事件 ---
     TASK_CREATED,       // 任务已创建
     TASK_STARTED,       // 任务开始执行
-    THINKING,           // Agent 思考过程
+    THINKING,           // Agent 思考过程（粗粒度占位，生产未 emit）
+    THINKING_BLOCK_START, // LLM 思考块开始（流式三段式：块头带 nodeId，前端按块分桶）
+    THINKING_DELTA,     // LLM 思考块增量 chunk（逐 token 文本）
+    THINKING_BLOCK_END, // LLM 思考块结束
     TOOL_CALL,          // 工具调用开始
     TOOL_RESULT,        // 工具调用结果
     CHECKPOINT_SAVED,   // 检查点已保存

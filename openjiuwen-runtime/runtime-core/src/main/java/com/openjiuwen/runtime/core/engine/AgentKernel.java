@@ -40,6 +40,24 @@ public interface AgentKernel {
      */
     Mono<String> think(String prompt, BudgetLimits budget);
 
+    /**
+     * 调用 LLM 进行推理（带身份，可发流式 chunk 事件）。
+     *
+     * <p>语义同 {@link #think(String, BudgetLimits)}，但携带 {@code taskId}/{@code nodeId}，
+     * 使内核能在流式 decode 过程中发布 {@link EventType#THINKING_BLOCK_START}/
+     * {@link EventType#THINKING_DELTA}/{@link EventType#THINKING_BLOCK_END} 三段式事件
+     * （对齐 AgentScope v2 {@code *_BLOCK_START/_DELTA/_END}）。前端据此显示"正在思考"进度，
+     * 扇出并行节点的 chunk 按 BLOCK_START 的 nodeId 分桶。
+     *
+     * <p>默认实现退化为不发声事件的 {@link #think(String, BudgetLimits)}——兼容测试/mock 及无 taskId 场景。
+     *
+     * @param taskId 任务 ID（null 时不发流式事件）
+     * @param nodeId 归属节点 ID（null 时为规划/验证等无 node 阶段）
+     */
+    default Mono<String> think(String prompt, BudgetLimits budget, TaskId taskId, NodeId nodeId) {
+        return think(prompt, budget);
+    }
+
     // ==================== 系统调用 2: 工具调用 ====================
 
     /**

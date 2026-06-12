@@ -118,7 +118,12 @@ public class AgentClient {
 
         activeTasks.put(taskId, new TaskStatus.Executing());
 
-        return adaptiveStrategy.execute(context)
+        // 合流 strategy 事件流与 kernel 事件流（think 三段式 chunk + NodeCompleted 等经 kernel.emit 走 eventSinks）。
+        // observeEvents 是热源 multicast sink，永不自动 complete，故用 takeUntil 在终止事件处截断，
+        // 否则 merge 永不结束、SSE 挂死。终止事件后 doFinally 仍清理 activeTasks。
+        return Flux.merge(adaptiveStrategy.execute(context), kernel.observeEvents(taskId))
+            .takeUntil(e -> e.type() == EventType.TASK_COMPLETED
+                         || e.type() == EventType.TASK_FAILED)
             .doFinally(signal -> activeTasks.remove(taskId));
     }
 
@@ -141,7 +146,12 @@ public class AgentClient {
 
         activeTasks.put(taskId, new TaskStatus.Executing());
 
-        return adaptiveStrategy.execute(context)
+        // 合流 strategy 事件流与 kernel 事件流（think 三段式 chunk + NodeCompleted 等经 kernel.emit 走 eventSinks）。
+        // observeEvents 是热源 multicast sink，永不自动 complete，故用 takeUntil 在终止事件处截断，
+        // 否则 merge 永不结束、SSE 挂死。终止事件后 doFinally 仍清理 activeTasks。
+        return Flux.merge(adaptiveStrategy.execute(context), kernel.observeEvents(taskId))
+            .takeUntil(e -> e.type() == EventType.TASK_COMPLETED
+                         || e.type() == EventType.TASK_FAILED)
             .doFinally(signal -> activeTasks.remove(taskId));
     }
 

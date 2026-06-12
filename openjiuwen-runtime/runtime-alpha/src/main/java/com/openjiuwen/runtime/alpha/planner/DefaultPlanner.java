@@ -85,11 +85,12 @@ public class DefaultPlanner implements Planner {
     private Mono<PlanResult> generateWithLLM(TaskId taskId, PlanGoal goal,
                                               PlanResult previousFailures) {
         String prompt = buildPrompt(goal, previousFailures);
+        // 传 taskId + nodeId=null：规划期无 node，前端可见规划阶段的"正在思考"块（无 nodeId 归属）
         return kernel.think(prompt, BudgetLimits.start(
                 goal.budgetHint() != null
                     ? new Budget.Fixed(10, 20, goal.budgetHint().estimatedTokens(), 0L)
                     : Budget.Fixed.productionDefault()
-            ))
+            ), taskId, null)
             .map(response -> parseAndValidate(response, goal));
     }
 

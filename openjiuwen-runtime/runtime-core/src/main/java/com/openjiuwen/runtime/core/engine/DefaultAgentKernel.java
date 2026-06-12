@@ -65,10 +65,22 @@ public class DefaultAgentKernel implements AgentKernel {
      *  详见 memory [[hierarchy1-streaming-refactor-plan]]。 */
     private static final long IDLE_TIMEOUT_SECONDS = 30L;
 
+    /** 并发生产者（并行节点虚拟线程）争用同一 sink 时的 emit 重试策略：忙等至多 1s，
+     *  覆盖 FAIL_NON_SERIALIZED（并发争用）/FAIL_OVERFLOW（订阅者短暂滞后），超时才放弃（极端死锁兜底）。 */
+    private static final Sinks.EmitFailureHandler EMIT_HANDLER =
+        Sinks.EmitFailureHandler.busyLooping(Duration.ofSeconds(1));
+
     // ==================== 系统调用 1: think ====================
 
     @Override
     public Mono<String> think(String prompt, BudgetLimits budget) {
+        // 2 参入口退化为不带身份的 4 参调用：taskId==null 时 4 参实现跳过流式事件发布，
+        // 行为与历史 2 参实现完全一致（仅流式聚合 + idle-timeout + 安全检查）。
+        return think(prompt, budget, null, null);
+    }
+
+    @Override
+    public Mono<String> think(String prompt, BudgetLimits budget, TaskId taskId, NodeId nodeId) {
         return Mono.fromCallable(() -> {
                 // 前置检查：预算
                 List<Violation> budgetViolations = safetyBoundary.checkBudget(budget);
@@ -77,10 +89,21 @@ public class DefaultAgentKernel implements AgentKernel {
                 }
                 return true; // 仅触发检查，返回值驱动后续 flatMap
             })
-            .flatMap(ignored -> llmProvider.stream(prompt)
-                .timeout(Duration.ofSeconds(IDLE_TIMEOUT_SECONDS))   // idle-timeout 治本
-                .reduce(new StringBuilder(), StringBuilder::append)
-                .map(StringBuilder::toString))
+            .flatMap(ignored -> {
+                // 流式三段式（对齐 AgentScope v2 *_BLOCK_START/_DELTA/_END）：
+                // 块头带 nodeId，前端按块分桶，扇出并行节点的 chunk 不串。
+                // taskId==null（2 参入口/测试）时跳过事件发布，零行为变化。
+                boolean emit = taskId != null;
+                if (emit) emitChunk(taskId, EventType.THINKING_BLOCK_START, "", nodeId);
+                return llmProvider.stream(prompt)
+                    .timeout(Duration.ofSeconds(IDLE_TIMEOUT_SECONDS))   // idle-timeout 治本
+                    .doOnNext(chunk -> { if (emit) emitChunk(taskId, EventType.THINKING_DELTA, chunk, null); })
+                    .reduce(new StringBuilder(), StringBuilder::append)
+                    .map(StringBuilder::toString)
+                    .doOnSuccess(v -> { if (emit) emitChunk(taskId, EventType.THINKING_BLOCK_END, "", nodeId); })
+                    .doOnError(e -> { if (emit) emitChunk(taskId, EventType.THINKING_BLOCK_END,
+                        "ERROR: " + e.getMessage(), nodeId); });
+            })
             .flatMap(output -> {
                 // 后置检查：输出安全性
                 List<Violation> outputViolations = safetyBoundary.checkLLMOutput(output);
@@ -179,7 +202,10 @@ public class DefaultAgentKernel implements AgentKernel {
         return Mono.fromRunnable(() -> {
             Sinks.Many<AgentEvent> sink = eventSinks.computeIfAbsent(
                 event.taskId(), k -> Sinks.many().multicast().onBackpressureBuffer());
-            sink.tryEmitNext(event);
+            // emitNext + busyLoop：并发生产者（think 流式 chunk 来自并行虚拟线程、NodeCompleted 来自
+            // executor 线程）争用同一 sink 时，tryEmitNext 会因 FAIL_NON_SERIALIZED 静默丢事件。
+            // busyLoop 在 FAIL_NON_SERIALIZED/FAIL_OVERFLOW 上忙等重试，保证不丢。
+            sink.emitNext(event, EMIT_HANDLER);
         });
     }
 
@@ -187,6 +213,24 @@ public class DefaultAgentKernel implements AgentKernel {
     public Flux<AgentEvent> observeEvents(TaskId taskId) {
         return eventSinks.computeIfAbsent(
             taskId, k -> Sinks.many().multicast().onBackpressureBuffer()).asFlux();
+    }
+
+    /**
+     * 流式 chunk 事件直发——不经 {@link #emit(AgentEvent)} 的 Mono.fromRunnable 包装，
+     * 避免在 think 的 doOnNext/doOnSuccess 热路径上每个 chunk 分配一个 Mono 再 subscribe。
+     *
+     * <p>并发安全：扇出并行节点的虚拟线程会并发调用（A/B/C 同时 think），
+     * {@code emitNext + busyLoop} 在 FAIL_NON_SERIALIZED（并发争用）和 FAIL_OVERFLOW（订阅者滞后）
+     * 上忙等重试——不丢事件，并对快产慢消形成天然背压。实测修复前 tryEmitNext 在并行节点下丢失
+     * BLOCK_START（仅 A 的 START 到达，B/C 的丢失）。
+     *
+     * @param nodeId 非 null 时作为 metadata.nodeId 携带（仅 BLOCK_START/END；DELTA 传 null 保持裸 chunk）
+     */
+    private void emitChunk(TaskId taskId, EventType type, String data, NodeId nodeId) {
+        Sinks.Many<AgentEvent> sink = eventSinks.computeIfAbsent(taskId,
+            k -> Sinks.many().multicast().onBackpressureBuffer());
+        Map<String, String> meta = (nodeId != null) ? Map.of("nodeId", nodeId.value()) : Map.of();
+        sink.emitNext(AgentEvent.of(taskId, type, data, meta), EMIT_HANDLER);
     }
 
     // ==================== 内部辅助：注册执行结果 ====================
