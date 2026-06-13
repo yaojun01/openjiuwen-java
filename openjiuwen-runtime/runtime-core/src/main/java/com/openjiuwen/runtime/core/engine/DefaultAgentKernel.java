@@ -9,6 +9,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * AgentKernel 默认实现。
@@ -37,8 +38,22 @@ public class DefaultAgentKernel implements AgentKernel {
     /** 安全边界 */
     private final SafetyBoundary safetyBoundary;
 
-    /** 事件广播：每个 taskId 一个 Sink */
-    private final Map<TaskId, Sinks.Many<AgentEvent>> eventSinks = new ConcurrentHashMap<>();
+    /** 事件广播：每个 taskId 一个 SinkHolder（multicast sink + 生产者串行锁）。
+     *  <p>并发根因（见诊断栈 {@code InternalManySink.emitNext → emitChunk → lambda$think$4}）：
+     *  扇出并行节点的虚拟线程在 {@code think().block()} 订阅期同步 emit BLOCK_START、并在 LLM 流 doOnNext 上
+     *  密集 emit DELTA，多线程并发轰击<strong>同一个</strong> multicast 安全 sink。该 sink 的 {@code tryEmitNext}
+     *  以 CAS 串行生产者，争用返回 {@code FAIL_NON_SERIALIZED}；{@code busyLooping} 重试 1s 仍抢不到 CAS 即抛
+     *  {@code Sinks$EmissionException}(Spec Rule 1.3) → think().block() 抛 → 节点 FAILED（串行基线全绿、并行必现）。
+     *  <p>治本：{@code emitLock} 把并发生产者串行化——同一时刻只一个线程进 {@code emitNext}，tryEmitNext 必成功，
+     *  根因消除（CAS 不再争用、不再抛）。下游订阅者仍在持锁线程同步收 onNext，但"串行"即满足 Spec 1.3。
+     *  锁粒度按 taskId（争用仅在同任务并行节点间），不同任务互不阻塞。 */
+    private final Map<TaskId, SinkHolder> eventSinks = new ConcurrentHashMap<>();
+
+    /** 每 taskId 的广播 sink 配一把生产者串行锁（见 {@link #eventSinks} 根因注释）。 */
+    private static final class SinkHolder {
+        final Sinks.Many<AgentEvent> sink = Sinks.many().multicast().onBackpressureBuffer();
+        final ReentrantLock emitLock = new ReentrantLock();
+    }
 
     /** 运行时结果存储：taskId → nodeId → result */
     private final Map<TaskId, Map<NodeId, Object>> taskResults = new ConcurrentHashMap<>();
@@ -65,8 +80,9 @@ public class DefaultAgentKernel implements AgentKernel {
      *  详见 memory [[hierarchy1-streaming-refactor-plan]]。 */
     private static final long IDLE_TIMEOUT_SECONDS = 30L;
 
-    /** 并发生产者（并行节点虚拟线程）争用同一 sink 时的 emit 重试策略：忙等至多 1s，
-     *  覆盖 FAIL_NON_SERIALIZED（并发争用）/FAIL_OVERFLOW（订阅者短暂滞后），超时才放弃（极端死锁兜底）。 */
+    /** emit 失败重试兜底：忙等至多 1s，覆盖 FAIL_OVERFLOW（订阅者短暂滞后）。
+     *  并发争用（FAIL_NON_SERIALIZED）已由 {@link SinkHolder#emitLock} 串行化生产者根除——
+     *  持锁期间至多一个线程 emit，tryEmitNext 不再返回 FAIL_NON_SERIALIZED。 */
     private static final Sinks.EmitFailureHandler EMIT_HANDLER =
         Sinks.EmitFailureHandler.busyLooping(Duration.ofSeconds(1));
 
@@ -200,19 +216,22 @@ public class DefaultAgentKernel implements AgentKernel {
     @Override
     public Mono<Void> emit(AgentEvent event) {
         return Mono.fromRunnable(() -> {
-            Sinks.Many<AgentEvent> sink = eventSinks.computeIfAbsent(
-                event.taskId(), k -> Sinks.many().multicast().onBackpressureBuffer());
-            // emitNext + busyLoop：并发生产者（think 流式 chunk 来自并行虚拟线程、NodeCompleted 来自
-            // executor 线程）争用同一 sink 时，tryEmitNext 会因 FAIL_NON_SERIALIZED 静默丢事件。
-            // busyLoop 在 FAIL_NON_SERIALIZED/FAIL_OVERFLOW 上忙等重试，保证不丢。
-            sink.emitNext(event, EMIT_HANDLER);
+            SinkHolder holder = eventSinks.computeIfAbsent(event.taskId(), k -> new SinkHolder());
+            // 持锁串行化生产者：多线程并发 emitNext 会令 multicast sink 的 CAS 持续 FAIL_NON_SERIALIZED，
+            // busyLoop 1s 抢不到即抛 Sinks$EmissionException（见 #eventSinks 根因注释）。锁保证至多一个线程
+            // 进 emitNext，tryEmitNext 必成功。非流式 chunk 的事件发布都经此路径（NodeCompleted/Failed 等）。
+            holder.emitLock.lock();
+            try {
+                holder.sink.emitNext(event, EMIT_HANDLER);
+            } finally {
+                holder.emitLock.unlock();
+            }
         });
     }
 
     @Override
     public Flux<AgentEvent> observeEvents(TaskId taskId) {
-        return eventSinks.computeIfAbsent(
-            taskId, k -> Sinks.many().multicast().onBackpressureBuffer()).asFlux();
+        return eventSinks.computeIfAbsent(taskId, k -> new SinkHolder()).sink.asFlux();
     }
 
     /**
@@ -220,17 +239,27 @@ public class DefaultAgentKernel implements AgentKernel {
      * 避免在 think 的 doOnNext/doOnSuccess 热路径上每个 chunk 分配一个 Mono 再 subscribe。
      *
      * <p>并发安全：扇出并行节点的虚拟线程会并发调用（A/B/C 同时 think），
-     * {@code emitNext + busyLoop} 在 FAIL_NON_SERIALIZED（并发争用）和 FAIL_OVERFLOW（订阅者滞后）
-     * 上忙等重试——不丢事件，并对快产慢消形成天然背压。实测修复前 tryEmitNext 在并行节点下丢失
-     * BLOCK_START（仅 A 的 START 到达，B/C 的丢失）。
+     * 由 {@link SinkHolder#emitLock} 串行化生产者——同一时刻只一个线程 emitNext，multicast sink 的 CAS 不再
+     * 争用（先前高并发下 CAS 持续 FAIL_NON_SERIALIZED、busyLoop 1s 抢不到即抛 Sinks$EmissionException，
+     * 见 #eventSinks 根因注释）。对快产慢消仍由 busyLoop + onBackpressureBuffer 形成背压。
+     *
+     * <p><b>调用方契约（对抗审查 #7/#8 钉死的硬约束）</b>：sink.emitNext 会同步通知下游订阅者，发生在持锁线程上
+     * （DELTA 经 doOnNext 跑在 reactor-netty I/O 线程）。故：① 下游订阅链必须<b>非阻塞</b>——当前唯一消费者
+     * {@code AgentClient.invokeStream} 仅 takeUntil 谓词 + doFinally（无重 I/O），锁持有为微秒级；② 订阅者<b>不得</b>
+     * 在 onNext 内对本 taskId 回调 emit/emitChunk（重入同一把锁→嵌套 onNext→重开 Spec 1.3），当前链路无此回调。
+     * 若未来下游需阻塞操作，应在该处加 publishOn 隔离，而非在此持锁等待。
      *
      * @param nodeId 非 null 时作为 metadata.nodeId 携带（仅 BLOCK_START/END；DELTA 传 null 保持裸 chunk）
      */
     private void emitChunk(TaskId taskId, EventType type, String data, NodeId nodeId) {
-        Sinks.Many<AgentEvent> sink = eventSinks.computeIfAbsent(taskId,
-            k -> Sinks.many().multicast().onBackpressureBuffer());
+        SinkHolder holder = eventSinks.computeIfAbsent(taskId, k -> new SinkHolder());
         Map<String, String> meta = (nodeId != null) ? Map.of("nodeId", nodeId.value()) : Map.of();
-        sink.emitNext(AgentEvent.of(taskId, type, data, meta), EMIT_HANDLER);
+        holder.emitLock.lock();
+        try {
+            holder.sink.emitNext(AgentEvent.of(taskId, type, data, meta), EMIT_HANDLER);
+        } finally {
+            holder.emitLock.unlock();
+        }
     }
 
     // ==================== 内部辅助：注册执行结果 ====================
