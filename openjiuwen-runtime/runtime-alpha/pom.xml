@@ -22,4 +22,21 @@
             <artifactId>runtime-core</artifactId>
         </dependency>
     </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <!-- runtime-alpha 主代码用 Java 21 preview 特性（虚拟线程 / 模式匹配，
+                         如 DefaultPregelExecutor，编译为 class file 65.65535）。测试若需加载
+                         这些 preview 类（如 RealConcurrencyProofTest 实例化 DefaultPregelExecutor
+                         做真并发证明），surefire fork 的测试 JVM 必须开启 enable-preview，
+                         否则抛 UnsupportedClassVersionError。与根 pom compiler 的 preview 配置对齐。 -->
+                    <argLine>--enable-preview</argLine>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
 </project>
