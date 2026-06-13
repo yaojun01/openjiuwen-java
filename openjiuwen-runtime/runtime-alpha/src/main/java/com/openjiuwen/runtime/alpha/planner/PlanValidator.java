@@ -46,6 +46,9 @@ public class PlanValidator {
         // 5. 约束检查
         checkConstraints(graph, constraints, issues);
 
+        // 6. 占位符卫生——description 与 inputs.value 不得含未解析/内嵌的 ${ （会被 LLM 原样 echo）
+        checkPlaceholderHygiene(graph, issues);
+
         boolean hasErrors = issues.stream()
             .anyMatch(i -> i.severity() == PlanResult.IssueSeverity.ERROR);
 
@@ -267,6 +270,41 @@ public class PlanValidator {
                 }
                 case Constraint.ApprovalConstraint ignored -> {
                     // ApprovalConstraint 在执行阶段检查
+                }
+            }
+        }
+    }
+
+    // ==================== 占位符卫生检查 ====================
+
+    /**
+     * 检查节点是否含未解析/内嵌的 ${} 占位符。
+     *
+     * 内嵌占位符（如 description 里的"维度3：${dim3}"）无法被 resolveTemplate/resolveInputs 解析，
+     * 会被 LLM 原样 echo 进输出（见 DeepResearchExample VERIFY_FAILED 案例）。description 完全禁止 ${}；
+     * inputs value 允许整值引用 ${nodeId.output}，禁止内嵌。
+     */
+    private void checkPlaceholderHygiene(TaskGraph graph, List<PlanResult.PlanIssue> issues) {
+        for (TaskNode node : graph.nodes()) {
+            // description 不该有任何占位符引用（引用应走 inputs 传值）
+            if (node.description().contains("${")) {
+                issues.add(PlanResult.PlanIssue.error(
+                    "UNRESOLVED_PLACEHOLDER_IN_DESCRIPTION",
+                    "节点 " + node.id() + " 的 description 含内嵌占位符，引用上游输出应放进 inputs 的整值 value",
+                    node.id().value()
+                ));
+            }
+            // inputs value：整值 ${...} 合法（约定引用语法），内嵌禁止
+            for (var entry : node.inputs().entrySet()) {
+                String v = entry.getValue();
+                boolean isWholeRef = v.startsWith("${") && v.endsWith("}");
+                if (!isWholeRef && v.contains("${")) {
+                    issues.add(PlanResult.PlanIssue.error(
+                        "UNRESOLVED_PLACEHOLDER_IN_INPUT",
+                        "节点 " + node.id() + " 的 input " + entry.getKey()
+                            + " 含内嵌占位符，引用应作为整值 value（如 \"${x.output}\"）",
+                        node.id().value()
+                    ));
                 }
             }
         }

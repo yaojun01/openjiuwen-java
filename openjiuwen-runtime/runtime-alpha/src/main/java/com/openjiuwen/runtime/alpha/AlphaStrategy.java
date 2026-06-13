@@ -161,10 +161,14 @@ public class AlphaStrategy implements ExecutionStrategy {
                             }
                         }
 
-                        // 发布节点失败事件
+                        // 发布节点失败事件（C层可观测：透传 executor 已捕获的真实异常原因，不再用通用文案）
                         for (NodeId failedId : superstep.failedNodes()) {
+                            Object raw = superstep.nodeResults().get(failedId);
+                            String error = (raw instanceof String s && s.startsWith("FAILED:"))
+                                ? s.substring("FAILED:".length()).trim()
+                                : (raw != null ? String.valueOf(raw) : "执行失败");
                             kernel.emit(toAlphaEvent(taskId, new AlphaEvent.NodeFailed(
-                                taskId, now(), failedId, "执行失败")))
+                                taskId, now(), failedId, error)))
                                 .subscribe(r -> {}, e -> {}); // COR-012
                         }
 

@@ -190,6 +190,7 @@ public class DefaultPlanner implements Planner {
             5. SUB_AGENT 的 description 填子目标
             6. 不能有循环依赖
             7. inputs 中引用上游输出用 ${nodeId.output} 格式
+            8. 禁止把 ${...} 占位符写进 description 或 inputs 的长文本里。引用上游输出时，必须把整个 ${nodeId.output} 单独作为 inputs 某个 key 的完整 value（如 "dim3": "${dim3_analysis.output}"），绝不要写成"维度3分析：${dim3}"这样的内嵌形式——内嵌占位符不会被解析，会被原样输出。
             """);
 
         return sb.toString();

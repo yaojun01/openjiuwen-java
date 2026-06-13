@@ -21,6 +21,7 @@ public enum EventType {
     TASK_FAILED,        // 任务失败
     TASK_PAUSED,        // 任务暂停
     TASK_CANCELLED,     // 任务取消
+    PLACEHOLDER_SANITIZED, // 残留占位符已剥离（B层排毒：检测到未解析 ${...} 并净化，不中断执行）
 
     // --- Alpha 策略专属 ---
     PLAN_GENERATED,     // TaskGraph 规划完成
