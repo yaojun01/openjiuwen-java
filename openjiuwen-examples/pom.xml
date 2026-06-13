@@ -39,4 +39,19 @@
             <scope>test</scope>
         </dependency>
     </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <!-- 测试需加载 preview 类 DefaultPregelExecutor（class file 65.65535），
+                         与根 pom compiler 的 enable-preview 选项对齐，否则抛 UnsupportedClassVersionError。
+                         （与 runtime-alpha 的 surefire 配置同源。） -->
+                    <argLine>--enable-preview</argLine>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
 </project>
